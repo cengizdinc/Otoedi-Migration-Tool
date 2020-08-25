@@ -1,0 +1,16 @@
+{
+  "source": {
+    "driver": "Pdo_Mysql",
+    "database": "otoedi_com",
+    "username": "serkankaptan",
+    "password": "UV6tT2uTsdtKKd-_ny3wzNYevDdJrGx6",
+    "hostname": "10.1.1.40"
+  },
+  "target": {
+    "driver": "Pdo_Mysql",
+    "database": "otoedi_v3_migrationTest",
+    "username": "root",
+    "password": "a!S45?123a!S45?123a!S45?123a!S45?123",
+    "hostname": "10.6.1.140"
+  }
+}

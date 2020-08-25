@@ -1,0 +1,49 @@
+{
+  "name": "software-development/otoedi-migration",
+  "description": "Otoedi V2 ve V3 arasindaki migration islemlerini yaptıran paket.",
+  "authors": [
+    {
+      "name": "Serkan Mert Kaptan",
+      "email": "serkan.kaptan@map.com.tr",
+      "role": "Senior Software Engineer"
+    }
+  ],
+  "license": "No Licence",
+  "repositories": [ 
+    {
+      "type": "git",
+      "url": "git@gitlab.hq.map.com.tr:software-development/map-logger.git"
+    },
+    {
+      "type": "git",
+      "url": "git@gitlab.hq.map.com.tr:software-development/pathhandler.git"
+    }
+  ],
+  "config": {
+    "platform": {
+      "php": "7.4"
+    }
+  },
+  "require": {
+    "tekinaydogdu/logger": "v1.5-alpha",
+    "tekinaydogdu/path-handler": "v1.3",
+    "php": "^7.4",
+    "ext-json": "*",
+    "ext-ctype": "*",
+    "ext-dom": "*",
+    "ext-iconv": "*",
+    "ext-fileinfo": "*",
+    "ext-libxml": "*",
+    "ext-mbstring": "*",
+    "ext-zip": "*",
+    "ext-zlib": "*",
+    "ext-openssl": "*",
+    "ext-pdo": "*",
+    "laminas/laminas-db": "^2.11"
+  },
+  "autoload": {
+    "psr-4": {
+      "Otoedi\\Migration\\": "src/"
+    }
+  }
+}

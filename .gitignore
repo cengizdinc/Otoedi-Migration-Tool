@@ -1,0 +1,6 @@
+/log/
+/deprecated/
+/data/
+/vendor/
+/.idea/
+composer.lock
