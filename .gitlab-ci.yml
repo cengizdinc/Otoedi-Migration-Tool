@@ -1,14 +1,8 @@
-variables:
-  STAGING_PATH: "/var/www/html/000_backendApps/a101-nivea-orders/"
-  PRODUCTION_PATH: "/var/www/html/000_backendApps/a101-nivea-orders/"
-
 image: php:7.4
 
 # Define pipeline stages
 stages:
   - code-quality
-  - deploy-staging
-  - deploy-production
 
 # Let's build before deploy
 before_script:
@@ -28,44 +22,3 @@ code-fix:
       - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_COMMIT_SHORT_SHA/phpcbf-report.txt
       - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_COMMIT_SHORT_SHA/phpcs-report.txt
   allow_failure: false
-
-# Deploy!
-deploy-staging:
-  stage: deploy-staging
-  script:
-    - echo "Deploying to staging server"
-    - mkdir build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG -p
-    - for filename in config/*-staging.json; do mv "$filename" "$(echo "$filename" | sed s/-staging//)"; done
-    - rsync -va . build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/ --exclude=*.config-production.json --exclude=*.config-development.json --exclude=build --exclude=.git
-    - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.90:$STAGING_PATH --delete
-    - ssh -tt nginx@10.1.1.90 "php73 /usr/local/bin/composer -d$STAGING_PATH install --no-interaction --profile --prefer-dist --optimize-autoloader"
-  artifacts:
-    paths:
-      - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/
-    expire_in: 1 week
-  environment:
-    name: staging
-  allow_failure: false
-  only:
-    - master
-    - /^release\/.*$/
-
-deploy-production:
- stage: deploy-production
- script:
-   - echo "Deploying to production server"
-   - mkdir build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG -p
-   - for filename in config/*-production.json; do mv "$filename" "$(echo "$filename" | sed s/-production//)"; done
-   - rsync -va . build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/ --exclude=*.config-staging.json --exclude=*.config-development.json --exclude=build --exclude=.git
-   - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.74:$PRODUCTION_PATH --delete
-   - ssh -tt nginx@10.1.1.74 "php73 /usr/local/bin/composer -d$PRODUCTION_PATH install --no-interaction --profile --prefer-dist --optimize-autoloader"
- artifacts:
-   paths:
-     - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/
-   expire_in: 1 week
- environment:
-   name: production
- allow_failure: false
- only:
-   - master
-
