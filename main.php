@@ -16,12 +16,13 @@ namespace Otoedi\Migration;
 require_once __DIR__ . '/vendor/autoload.php';
 
 use Laminas\Db\Adapter\Exception\InvalidQueryException;
+use Laminas\Db\Sql\Expression;
 use Laminas\Db\Sql\Select;
 use Laminas\Db\Sql\Where;
 use Otoedi\Migration\Helper\Db;
 use Map\Logger\EchoLogger;
 
-echo PHP_EOL;
+
 $logger = new EchoLogger();
 
 echo "Please type source party code to be migrated: ";
@@ -57,6 +58,7 @@ $relations = $instanceS->get(
 );
 $connectionT = $instanceT->adapter->getDriver()->getConnection();
 foreach ($relations as $relation) {
+    echo PHP_EOL . PHP_EOL . PHP_EOL . PHP_EOL;
     switch ($relation["XDOC_TYPE_ID"]) {
         case "1":
         case "2":
@@ -75,8 +77,7 @@ foreach ($relations as $relation) {
 
     $supplierInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"], "type" => 2]);
     if (empty($supplierInformation)) {
-        echo PHP_EOL;
-        $logger->info("Party {$relation["supplierCode"]} doesn't exist at target database. Creating.. ");
+        $logger->info("Supplier {$relation["supplierCode"]}, {$relation["supplierName"]} doesn't exist at target database. Creating.. ");
         $supplierId = $instanceT->create("party", [
             "identifier" => $relation["supplierCode"],
             "otoedi_code" => $relation["supplierCode"],
@@ -84,14 +85,12 @@ foreach ($relations as $relation) {
             "name" => mb_substr($relation["supplierName"], 0, 50)
         ]);
         $supplierInformation["party_id"] = $supplierId;
-        echo PHP_EOL;
         $logger->info("Supplier party created with following row id, $supplierId.");
     }
 
     $buyerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["buyerCode"], "type" => 1]);
     if (empty($buyerInformation)) {
-        echo PHP_EOL;
-        $logger->error("Related buyer party {$relation["buyerName"]} doesn't exist at target database. Creating.");
+        $logger->error("Buyer {$relation["buyerCode"]}, {$relation["buyerName"]} doesn't exist at target database. Creating.");
         $buyerPartyId = $instanceT->create("party", [
             "identifier" => $relation["buyerCode"],
             "otoedi_code" => $relation["buyerCode"],
@@ -99,7 +98,6 @@ foreach ($relations as $relation) {
             "name" => mb_substr($relation["buyerName"], 0, 50)
         ]);
         $buyerInformation["party_id"] = $buyerPartyId;
-        echo PHP_EOL;
         $logger->info("Related buyer party created with following row id, $buyerPartyId.");
     }
 
@@ -114,14 +112,13 @@ foreach ($relations as $relation) {
             "fk_supplier_id" => $supplierInformation["party_id"]
         ]);
         $pr["pr_id"] = $prId;
-        echo PHP_EOL;
+
         $logger->info("Party relation created with row id, $prId.");
     }
 
     $sellerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"]]);
     if (empty($sellerInformation)) {
-        echo PHP_EOL;
-        $logger->error("Related seller party {$buyerInformation["NAME"]} doesn't exist at target database. Creating.");
+        $logger->error("Seller  {$relation["supplierCode"]} doesn't exist at target database. Creating.");
         $sellerPartyId = $instanceT->create("party", [
             "identifier" => $relation["supplierCode"],
             "otoedi_code" => $relation["supplierCode"],
@@ -129,7 +126,7 @@ foreach ($relations as $relation) {
             "name" => $relation["NAME"]
         ]);
         $sellerInformation["party_id"] = $sellerPartyId;
-        echo PHP_EOL;
+
         $logger->info("Related seller party created with following row id, $sellerPartyId.");
     }
 
@@ -142,14 +139,15 @@ foreach ($relations as $relation) {
         ->unnest();
     $xdocWhere->equalTo("X.XDOC_TYPE_ID", $relation["XDOC_TYPE_ID"]);
 
-    $getXdocList = $instanceS->get("XDOC", "X", [], $xdocWhere, false, "X.XDOC_TYPE_ID", [
+    $getXdocList = $instanceS->get("XDOC", "X", [], $xdocWhere, 5, "X.XDOC_TYPE_ID", [
         ["name" => ["XT" => "XDOC_TYPE"], "on" => "XT.ID = X.XDOC_TYPE_ID", "columns" => ["TYPE"], "type" => Select::JOIN_LEFT],
         ["name" => ["PS" => "PARTIES"], "on" => "X.SENDER_PARTY_ID = PS.ID", "columns" => [], "type" => Select::JOIN_LEFT],
         ["name" => ["PR" => "PARTIES"], "on" => "X.RECEPIENT_PARTY_ID = PR.ID", "columns" => [], "type" => Select::JOIN_LEFT],
     ], "X.ID");
 
     if (empty($getXdocList)) {
-        $logger->error("Couldnt find any document.");
+        $logger->error("Couldnt find any document with type of {$relation["XDOC_TYPE_ID"]}.");
+        continue;
     }
 
     if (!isset($getXdocList[0])) {
@@ -157,9 +155,9 @@ foreach ($relations as $relation) {
     }
 
     foreach ($getXdocList as $xdoc) {
+        echo PHP_EOL . PHP_EOL;
         $connectionT->beginTransaction();
         if (empty($xdoc["TYPE"])) {
-            echo PHP_EOL;
             $logger->error("Cannot identify document type, xdoc id: {$xdoc["ID"]}. Skipping.");
             $connectionT->rollback();
             continue;
@@ -178,20 +176,22 @@ foreach ($relations as $relation) {
                 "original_filename" => $xdoc["XML_PATH"],
                 "insert_date" => $xdoc["INSERT_TIME"],
             ]);
-            echo PHP_EOL;
+
             $logger->info("Document created, document id: $documentId, xdoc id: {$xdoc["ID"]}");
         } catch (InvalidQueryException $e) {
-            echo PHP_EOL;
             $logger->error("Cannot create document, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
             continue;
         }
-
         switch ($xdoc["TYPE"]) {
             case "DELFOR":
                 $delforList = $instanceS->get("XDOC_DELFOR_DETAIL", "XDD", [], ["XDD.XDOC_ID" => $xdoc["ID"]], false, false, [
                     ["name" => ["XD" => "XDOC_DELFOR"], "on" => "XDD.DELFOR_ID = XD.ID", "columns" => ["Snrf", "BeginningInventoryDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode"], "type" => Select::JOIN_LEFT],
-                    ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE", ], "type" => Select::JOIN_LEFT]
+                    ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE",], "type" => Select::JOIN_LEFT]
                 ]);
+
+                if (!isset($delforList[0])) {
+                    $delforList = [$delforList];
+                }
 
                 try {
                     $orderId = $instanceT->create("order", [
@@ -199,20 +199,19 @@ foreach ($relations as $relation) {
                         "fk_pr_id" => $pr["pr_id"],
                         "order_number" => !empty($delforList[0]["Snrf"]) ? $delforList[0]["Snrf"] : $xdoc["RELEASE_NUMBER"],
                         "order_date" => $xdoc["ISSUE_DATE"],
-                        "horizon_start_date" => $delforList[0]["BeginningInventoryDate"] == "0000-00-00" ? null : $delforList[0]["BeginningInventoryDate"],
-                        "horizon_end_date" => $delforList[0]["HorizonEndDate"] == "0000-00-00" ? null : $delforList[0]["HorizonEndDate"],
+                        "horizon_start_date" => $delforList[0]["BeginningInventoryDate"] == "0000-00-00" ? null : @$delforList[0]["BeginningInventoryDate"],
+                        "horizon_end_date" => $delforList[0]["HorizonEndDate"] == "0000-00-00" ? null : @$delforList[0]["HorizonEndDate"],
                         "fk_buyer_id" => $buyerInformation["party_id"],
-                        "buyer_identifier" => $delforList[0]["BuyerCode"],
+                        "buyer_identifier" => @$delforList[0]["BuyerCode"],
                         "fk_supplier_id" => $supplierInformation["party_id"],
-                        "supplier_identifier" => $delforList[0]["SupplierCode"],
+                        "supplier_identifier" => @$delforList[0]["SupplierCode"],
                         "fk_seller_id" => $supplierInformation["party_id"],
-                        "seller_identifier" => $delforList[0]["SellerCode"],
+                        "seller_identifier" => @$delforList[0]["SellerCode"],
                         "insert_date" => $xdoc["INSERT_TIME"],
                     ]);
-                    echo PHP_EOL;
+
                     $logger->info("Order created, order id: $orderId.");
                 } catch (InvalidQueryException $e) {
-                    echo PHP_EOL;
                     $logger->error("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                     $connectionT->rollback();
                     continue 2;
@@ -228,10 +227,9 @@ foreach ($relations as $relation) {
                                 "name" => $line["DeliveryPointCode"],
                             ]);
                             $consignee["consignee_id"] = $consigneeId;
-                            echo PHP_EOL;
+
                             $logger->info("Consignee created, consignee id: $consigneeId.");
                         } catch (InvalidQueryException $e) {
-                            echo PHP_EOL;
                             $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                             $connectionT->rollback();
                             continue 3;
@@ -249,10 +247,9 @@ foreach ($relations as $relation) {
                                     "name" => $line["UnloadingDockCode"],
                                 ]);
                                 $dock["dock_id"] = $dockId;
-                                echo PHP_EOL;
+
                                 $logger->info("Dock created, dock id: $dockId.");
                             } catch (InvalidQueryException $e) {
-                                echo PHP_EOL;
                                 $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                                 $connectionT->rollback();
                                 continue 3;
@@ -277,10 +274,9 @@ foreach ($relations as $relation) {
                                 "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : $line["DeliveryPointCode"]
                             ]);
                             $orderConsignee["order_consignee_id"] = $ocId;
-                            echo PHP_EOL;
+
                             $logger->info("OC created, oc id: $ocId.");
                         } catch (InvalidQueryException $e) {
-                            echo PHP_EOL;
                             $logger->error("Cannot create oc, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                             $connectionT->rollback();
                             continue 3;
@@ -296,10 +292,9 @@ foreach ($relations as $relation) {
                                 "description" => $line["ItemDescription"] ?? null
                             ]);
                             $product["product_id"] = $productId;
-                            echo PHP_EOL;
+
                             $logger->info("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
-                            echo PHP_EOL;
                             $logger->error("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                             $connectionT->rollback();
                             continue 3;
@@ -340,9 +335,33 @@ foreach ($relations as $relation) {
                             "additional_information" => null,
                             "insert_date" => $xdoc["INSERT_TIME"],
                         ]);
+
+                        $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELFOR_DETAIL_ID" => $line["ID"]]);
+                        if (!isset($matchWithDesadv[0])) {
+                            $matchWithDesadv = [$matchWithDesadv];
+                        }
+                        foreach ($matchWithDesadv as $desadv) {
+                            if (!empty($matchWithDesadv["XDOC_DESADV_DETAIL_ID"])) {
+                                try {
+                                    $instanceT->create("v2_migration", [
+                                        "order_line_id" => $orderDetailId,
+                                        "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
+                                        "XDOC_DELFOR_DETAIL_ID" => $line["ID"],
+                                        "consignee_identifier" => @$line["DeliveryPointCode"],
+                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                        "original_delivery_date" => @$line["ForecastPeriodStartDate"],
+                                    ]);
+                                } catch (InvalidQueryException $e) {
+                                    $logger->error("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                    $connectionT->rollback();
+                                    continue 4;
+                                }
+                            }
+                        }
+
                         $logger->info("Line created, id: $orderDetailId.");
-                    } catch (InvalidQueryException $e) {
                         echo PHP_EOL;
+                    } catch (InvalidQueryException $e) {
                         $logger->error("Cannot create line, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                         $connectionT->rollback();
                         continue 3;
@@ -363,6 +382,10 @@ foreach ($relations as $relation) {
                     ]
                 );
 
+                if (!isset($deljitList[0])) {
+                    $deljitList = [$deljitList];
+                }
+
                 try {
                     $orderId = $instanceT->create("order", [
                         "fk_document_id" => $documentId,
@@ -379,10 +402,9 @@ foreach ($relations as $relation) {
                         "seller_identifier" => @$deljitList[0]["SellerCode"],
                         "insert_date" => $xdoc["INSERT_TIME"],
                     ]);
-                    echo PHP_EOL;
+
                     $logger->info("Order created, order id: $orderId.");
                 } catch (InvalidQueryException $e) {
-                    echo PHP_EOL;
                     $logger->error("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                     $connectionT->rollback();
                     continue 2;
@@ -398,7 +420,7 @@ foreach ($relations as $relation) {
                                 "name" => $deljitList[0]["ShipToCode"],
                             ]);
                             $consignee["consignee_id"] = $consigneeId;
-                            echo PHP_EOL;
+
                             $logger->info("Consignee created, consignee id: $consigneeId.");
                         } catch (InvalidQueryException $e) {
                             $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
@@ -418,7 +440,7 @@ foreach ($relations as $relation) {
                                     "name" => $line["UnloadingDockCode"],
                                 ]);
                                 $dock["dock_id"] = $dockId;
-                                echo PHP_EOL;
+
                                 $logger->info("Dock created, dock id: $dockId.");
                             } catch (InvalidQueryException $e) {
                                 $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
@@ -446,7 +468,7 @@ foreach ($relations as $relation) {
                                 "dock_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
                             ]);
                             $orderConsignee["order_consignee_id"] = $ocId;
-                            echo PHP_EOL;
+
                             $logger->info("OC created, oc id: $ocId.");
                         } catch (InvalidQueryException $e) {
                             $logger->error("Cannot create order consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
@@ -464,7 +486,6 @@ foreach ($relations as $relation) {
                                 "description" => $line["ItemDescription"] ?? $line["ItemSenderCode"]
                             ]);
                             $product["product_id"] = $productId;
-                            echo PHP_EOL;
                             $logger->info("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
                             $logger->error("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
@@ -508,10 +529,33 @@ foreach ($relations as $relation) {
                             "additional_information" => null,
                             "insert_date" => $xdoc["INSERT_TIME"],
                         ]);
+
+                        $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELJIT_DETAIL_ID" => $line["ID"]]);
+                        if (!isset($matchWithDesadv[0])) {
+                            $matchWithDesadv = [$matchWithDesadv];
+                        }
+                        foreach ($matchWithDesadv as $desadv) {
+                            if (!empty($desadv["XDOC_DESADV_DETAIL_ID"])) {
+                                try {
+                                    $instanceT->create("v2_migration", [
+                                        "order_line_id" => $orderDetailId,
+                                        "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
+                                        "XDOC_DELJIT_DETAIL_ID" => $line["ID"],
+                                        "consignee_identifier" => @$line["DeliveryPointCode"],
+                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                        "original_delivery_date" => @$line["ShipScheduleDate"],
+                                    ]);
+                                } catch (InvalidQueryException $e) {
+                                    $logger->error("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                    $connectionT->rollback();
+                                    continue 4;
+                                }
+                            }
+                        }
+
+                        $logger->info("Line created, id: $orderDetailId.");
                         echo PHP_EOL;
-                        $logger->info("Order line created, id: $orderDetailId.");
                     } catch (InvalidQueryException $e) {
-                        echo PHP_EOL;
                         $logger->info("Cannot create order line, id: {$xdoc["ID"]}. Error: {$e->getMessage()}");
                         $connectionT->rollback();
                         continue 3;
@@ -537,10 +581,9 @@ foreach ($relations as $relation) {
                             "name" => $despatchList[0]["ShipToCode"],
                         ]);
                         $consignee["consignee_id"] = $consigneeId;
-                        echo PHP_EOL;
+
                         $logger->info("Consignee created, consignee id: $consigneeId.");
                     } catch (InvalidQueryException $e) {
-                        echo PHP_EOL;
                         $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                         $connectionT->rollback();
                         continue 2;
@@ -557,10 +600,9 @@ foreach ($relations as $relation) {
                             "name" => $despatchList[0]["ShipToCode"],
                         ]);
                         $dock["dock_id"] = $dockId;
-                        echo PHP_EOL;
+
                         $logger->info("Dock created, dock id: $dockId.");
                     } catch (InvalidQueryException $e) {
-                        echo PHP_EOL;
                         $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
                         $connectionT->rollback();
                         continue 2;
@@ -585,10 +627,9 @@ foreach ($relations as $relation) {
                         "number_of_packages" => null,
                         "insert_date" => $xdoc["INSERT_TIME"]
                     ]);
-                    echo PHP_EOL;
+
                     $logger->info("Despatch created, despatch id: $despatchId.");
                 } catch (InvalidQueryException $e) {
-                    echo PHP_EOL;
                     $logger->error("Cannot create despatch, {$e->getMessage()} xdoc id: {$xdoc["ID"]}. Skipping.");
                     $connectionT->rollback();
                     continue 2;
@@ -604,69 +645,20 @@ foreach ($relations as $relation) {
                                 "description" => $line["ItemDescription"]
                             ]);
                             $product["product_id"] = $productId;
-                            echo PHP_EOL;
+
                             $logger->info("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
-                            echo PHP_EOL;
                             $logger->error("Cannot create product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
                             $connectionT->rollback();
                             continue 3;
                         }
                     }
 
-                    $desadvRelations = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]], false, false, [
-                        ["name" => ["XDJD" => "XDOC_DELJIT_DETAIL"], "on" => "XDJD.ID = DD.XDOC_DELJIT_DETAIL_ID", "columns" => ["ShipScheduleDate", "PurchaseOrderNumber"], "type" => Select::JOIN_LEFT]
-                    ]);
-
-                    if (empty($desadvRelations)) {
-                        $desadvRelations = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]], false, false, [
-                            ["name" => ["XDFD" => "XDOC_DELFOR_DETAIL"], "on" => "XDFD.ID = DD.XDOC_DELFOR_DETAIL_ID", "columns" => ["ForecastPeriodStartDate", "PurchaseOrderNumber"], "type" => Select::JOIN_LEFT]
-                        ]);
-                    }
-
-                    $desadvDeliveryDate = !empty($desadvRelations["ShipScheduleDate"])
-                        ? $desadvRelations["ShipScheduleDate"]
-                        : $desadvRelations["ForecastPeriodStartDate"];
-
-                    $desadvDeliveryDate = date("Y-m-d H:i:s", strtotime($desadvDeliveryDate));
-
-                    echo PHP_EOL . PHP_EOL;
-                    print_r($desadvDeliveryDate);
-                    echo PHP_EOL . PHP_EOL;
-                    $olWhere = new Where();
-                    $olWhere->nest()
-                        ->equalTo("identifier", $line["ItemSenderCode"])
-                        ->or
-                        ->equalTo("identifier", $line["ItemReceiverCode"])
-                        ->unnest();
-                    $olWhere->nest()
-                        ->equalTo("consignee_identifier", $line["ShipToCode"])
-                        ->or
-                        ->equalTo("dock_identifier", $line["ShipToCode"])
-                        ->unnest();
-//                    $olWhere->equalTo("o.order_number", $desadvRelations["PurchaseOrderNumber"]);
-
-                    if (!empty($desadvDeliveryDate)) {
-                        $olWhere->equalTo("ol.original_delivery_date", $desadvDeliveryDate);
-                    }
-
-                    $order_line = $instanceT->get(
-                        "order_line",
-                        "ol",
-                        [],
-                        $olWhere,
-                        false,
-                        false,
-                        [
-                            ["name" => ["o" => "order"], "on" => "o.order_id = ol.fk_order_id", "columns" => [], "type" => Select::JOIN_LEFT],
-                            ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["consignee_identifier", "dock_identifier"], "type" => Select::JOIN_LEFT],
-                        ]
-                    );
-
+                    $migratedOrderLine = $instanceT->get("v2_migration", "m", [], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]], 1);
                     try {
                         $dpId = $instanceT->create("despatch_product", [
                             "fk_despatch_id" => $despatchId,
-                            "fk_order_line_id" => $order_line["order_line_id"],
+                            "fk_order_line_id" => $migratedOrderLine["order_line_id"],
                             "fk_product_id" => $product["product_id"],
                             "quantity_despatch" => $line["DispatchQuantity"],
                             "quantity_package_handling" => 1,
@@ -675,13 +667,15 @@ foreach ($relations as $relation) {
                             "advice_note_number" => "",
                             "insert_date" => $xdoc["INSERT_TIME"]
                         ]);
-                    } catch (InvalidQueryException $e) {
+                        $instanceT->update("v2_migration", ["despatch_product_id" => $dpId], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]]);
+
+                        $logger->info("Despatch product created. id: $dpId");
                         echo PHP_EOL;
+                    } catch (InvalidQueryException $e) {
                         $logger->error("Cannot create despatch product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
                         $connectionT->rollback();
                         continue 3;
                     }
-
 
                     $shipment = $instanceT->get("shipment", "s", [], ["transport_identifier" => $line["ShipmentNumber"]]);
                     if (empty($shipment)) {
@@ -714,10 +708,10 @@ foreach ($relations as $relation) {
                                 "insert_date" => $xdoc["INSERT_TIME"]
                             ]);
                             $shipment["shipment_id"] = $shipmentId;
-                            echo PHP_EOL;
+
                             $logger->info("Shipment created, id: $shipmentId");
-                        } catch (InvalidQueryException $e) {
                             echo PHP_EOL;
+                        } catch (InvalidQueryException $e) {
                             $logger->error("Cannot create shipment, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
                             $connectionT->rollback();
                             continue 3;
@@ -728,8 +722,85 @@ foreach ($relations as $relation) {
         }
         $connectionT->commit();
     }
+
+    $deljitShipmentCumulativeWhere = new Where();
+    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["party_id"])
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["party_id"])
+        ->expression("desdoc.STATUS & ?", 8);
+    $deljitShipmentCumulativeColumns = [
+        "LastAsnShipmentCumulativeQuantity" => new Expression("MAX(deld.LastAsnShipmentCumulativeQuantity)"),
+        "ItemSenderCode",
+        "deld.ID"
+    ];
+    $deljitShipmentCumulative = $instanceS->get("XDOC_DELJIT_DETAIL", "deld", $deljitShipmentCumulativeColumns, $deljitShipmentCumulativeWhere, false, false, [
+        ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
+        ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
+        ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
+    ], "deld.ItemSenderCode");
+    foreach ($deljitShipmentCumulative as $deljitShipment) {
+        $findRelation = $instanceT->get("v2_migration", "m", [], ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"], false, false, [
+            ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+            ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
+        ]]);
+
+        $instanceT->update("cumulative", [
+            "current_dispetched" => $deljitShipment["LastAsnShipmentCumulativeQuantity"]
+        ], [
+            "fk_product_id" => $findRelation["fk_product_id"],
+            "fk_party_id" => $supplierInformation["party_id"],
+            "fk_consignee_id" => $findRelation["fk_consignee_id"]
+        ]);
+    }
+
+    $deljitReceivedCumulativeWhere = new Where();
+    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["party_id"])
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["party_id"]);
+    $deljitReceivedCumulativeColumns = [
+        "LastReceivedCumulativeQuantity" => new Expression("MAX(deld.LastReceivedCumulativeQuantity)"),
+        "ItemSenderCode"
+    ];
+    $deljitReceivedCumulative = $instanceS->get("XDOC_DELJIT_DETAIL", "deld", $deljitReceivedCumulativeColumns, $deljitReceivedCumulativeWhere, false, false, [
+        ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
+        ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
+        ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
+    ], "deld.ItemSenderCode");
+    foreach ($deljitShipmentCumulative as $deljitShipment) {
+        $findRelation = $instanceT->get("v2_migration", "m", [], ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"], false, false, [
+            ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+            ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
+        ]]);
+
+        $instanceT->update("cumulative", [
+            "current_acknowledged" => $deljitShipment["LastReceivedCumulativeQuantity"]
+        ], [
+            "fk_product_id" => $findRelation["fk_product_id"],
+            "fk_party_id" => $supplierInformation["party_id"],
+            "fk_consignee_id" => $findRelation["fk_consignee_id"]
+        ]);
+    }
 }
 
-// kümülatifler ayrilacak, kumulatifte yalnizca update yapilacak / zaten triggerla olusuyor. kumulatif olmadan proje kapanmaz
-// son sipariste gelen acnowledge
-// son siparisteki miktar + sevk miktar dispetched
+
+/*
+ select max(deld.LastAsnShipmentCumulativeQuantity),
+            deld.ItemSenderCode
+     from XDOC_DELJIT_DETAIL deld
+              inner join XDOC on deld.XDOC_ID = XDOC.ID
+              inner join XDOC_DESADV des on deld.LastDeliveredDesadvID = des.ID
+              inner join XDOC desdoc on des.XDOC_ID = desdoc.ID
+     where XDOC.SENDER_PARTY_ID = :senderId
+       and XDOC.RECEPIENT_PARTY_ID = :recipientId
+       and desdoc.STATUS & 8  group by deld.ItemSenderCode;
+
+
+ select max(deld.LastReceivedCumulativeQuantity),
+            deld.ItemSenderCode
+     from XDOC_DELJIT_DETAIL deld
+              inner join XDOC on deld.XDOC_ID = XDOC.ID
+              inner join XDOC_DESADV des on deld.LastDeliveredDesadvID = des.ID
+              inner join XDOC desdoc on des.XDOC_ID = desdoc.ID
+     where XDOC.SENDER_PARTY_ID = :senderId
+       and XDOC.RECEPIENT_PARTY_ID = :recipientId
+       group by deld.ItemSenderCode;
+
+ */

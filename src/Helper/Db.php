@@ -157,6 +157,8 @@ class Db
             $select->group($group);
         }
 
+        // echo $sql->buildSqlString($select);
+
         try {
             $statement = $this->adapter->query($sql->buildSqlString($select), Adapter::QUERY_MODE_EXECUTE);
         } catch (InvalidQueryException $exception) {
