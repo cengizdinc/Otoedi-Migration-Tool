@@ -36,7 +36,6 @@ deploy-production:
   script:
     - echo "Deploying to production server"
     - mkdir build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG -p
-    - for filename in config/*-production.json; do mv "$filename" "$(echo "$filename" | sed s/-production//)"; done
     - rsync -va . build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/ --exclude=*.config-staging.json --exclude=*.config-development.json --exclude=build --exclude=.git
     - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.70:$PRODUCTION_PATH --delete
     - ssh -tt nginx@10.1.1.74 "composer && php74 /usr/local/bin/composer -d$PRODUCTION_PATH install --no-interaction --profile --prefer-dist --optimize-autoloader --no-dev"
