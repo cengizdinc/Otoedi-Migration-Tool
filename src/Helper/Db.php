@@ -69,7 +69,7 @@ class Db
         $update = new Update($table);
         $update->set($values);
 
-        if (false !== $where && $where instanceof Where) {
+        if ($where !== false and ($where instanceof Where or is_array($where))) {
             $update->where($where);
         }
 
