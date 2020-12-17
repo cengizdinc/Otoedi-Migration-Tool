@@ -2,7 +2,7 @@
   "source": {
     "driver": "Pdo_Mysql",
     "database": "otoedi_v3",
-    "username": "root",
+    "username": "remoteroot",
     "password": "GPOt*AAI.B9H,OK=",
     "hostname": "10.1.1.90",
     "charset": "UTF8"
