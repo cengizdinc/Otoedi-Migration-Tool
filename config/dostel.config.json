@@ -1,0 +1,18 @@
+{
+  "source": {
+    "driver": "Pdo_Mysql",
+    "database": "otoedi_v3",
+    "username": "root",
+    "password": "GPOt*AAI.B9H,OK=",
+    "hostname": "10.1.1.90",
+    "charset": "UTF8"
+  },
+  "target": {
+    "driver": "Pdo_Mysql",
+    "database": "otoedi_v3",
+    "username": "otoediV3_web_app_user",
+    "password": "Uf46xvtJ0Cyu[1;1DVDH>@azXoy,6+V-",
+    "hostname": "10.1.1.70",
+    "charset": "UTF8"
+  }
+}
