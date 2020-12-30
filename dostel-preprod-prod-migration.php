@@ -89,7 +89,7 @@ foreach ($products as $product) {
         }
     }
 }
-$documents = $sourceDb->get('document', 'd', [], ['fk_pr_id' => $prList], false, ['fk_dt_id']);
+$documents = $sourceDb->get('document', 'd', [], ['fk_pr_id' => $prList]);
 $documents = !isset($documents[0]) ? [$documents] : $documents;
 $documentXref = [];
 $olXref = [];

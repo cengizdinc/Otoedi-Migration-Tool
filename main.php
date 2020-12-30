@@ -15,29 +15,36 @@ namespace Otoedi\Migration;
 
 require_once __DIR__ . '/vendor/autoload.php';
 
+use Exception;
 use Laminas\Db\Adapter\Exception\InvalidQueryException;
 use Laminas\Db\Sql\Expression;
 use Laminas\Db\Sql\Select;
 use Laminas\Db\Sql\Where;
 use Otoedi\Migration\Helper\Db;
-use Map\Logger\EchoLogger;
+use Monolog\Logger;
+use Bramus\Monolog\Formatter\ColoredLineFormatter;
+use Monolog\Handler\StreamHandler;
+
+try {
+    $logger = new Logger('o3Mig');
+    $streamHandler = new StreamHandler('php://stdout', Logger::DEBUG);
+    $formatter = new ColoredLineFormatter(null, null, 'Y-m-d H:i:s', false, true);
+    $streamHandler->setFormatter($formatter);
+    $logger->pushHandler($streamHandler);
+} catch (Exception $e) {
+    die("Log configuration is invalid : {$e->getMessage()}" . PHP_EOL);
+}
 
 
-$logger = new EchoLogger();
-
-echo "Please type source party code to be migrated: ";
-$otoediCode = trim(fgets(STDIN));
-
+// echo "Please type source party code to be migrated: ";
+// $otoediCode = trim(fgets(STDIN));
+$otoediCode = 'OEHUB009';
 // ---------------------------------------------------------------------------------------------------------------------
-
 $dbConfig = json_decode(file_get_contents(__DIR__ . "/config/db.config.json"));
 !empty($dbConfig) or die('Can not be found the configuration parameters!');
-
 $instanceS = new Db((array)$dbConfig->source);
 $instanceT = new Db((array)$dbConfig->target);
-
 // ---------------------------------------------------------------------------------------------------------------------
-
 $partyWhere = new Where();
 $partyWhere->nest()
     ->equalTo("PS.EDI_CODE", $otoediCode)
@@ -50,62 +57,80 @@ $relations = $instanceS->get(
     [],
     $partyWhere,
     false,
-    false,
+    "PP.XDOC_TYPE_ID",
     [
-        ["name" => ["PS" => "PARTIES"], "on" => "PS.ID = PP.SENDER_PARTIES_ID", "columns" => ["senderName" => "NAME", "senderCode" => "EDI_CODE"], "type" => Select::JOIN_LEFT],
-        ["name" => ["PR" => "PARTIES"], "on" => "PR.ID = PP.RECEPIENT_PARTIES_ID", "columns" => ["receiverName" => "NAME", "receiverCode" => "EDI_CODE"], "type" => Select::JOIN_LEFT],
+        ["name" => ["PS" => "PARTIES"], "on" => "PS.ID = PP.SENDER_PARTIES_ID", "columns" => ["senderName" => "NAME", "senderCode" => "EDI_CODE", "senderId" => "ID"], "type" => Select::JOIN_LEFT],
+        ["name" => ["PR" => "PARTIES"], "on" => "PR.ID = PP.RECEPIENT_PARTIES_ID", "columns" => ["receiverName" => "NAME", "receiverCode" => "EDI_CODE", "receiverId" => "ID"], "type" => Select::JOIN_LEFT],
     ]
 );
+$logger->info(count($relations) . " relations found.");
 $connectionT = $instanceT->adapter->getDriver()->getConnection();
+$connectionT = $connectionT->beginTransaction();
 foreach ($relations as $relation) {
-    echo PHP_EOL . PHP_EOL . PHP_EOL . PHP_EOL;
     switch ($relation["XDOC_TYPE_ID"]) {
         case "1":
         case "2":
             $relation["supplierCode"] = $relation["receiverCode"];
             $relation["supplierName"] = $relation["receiverName"];
+            $relation["supplierId"] = $relation["receiverId"];
             $relation["buyerCode"] = $relation["senderCode"];
             $relation["buyerName"] = $relation["senderName"];
+            $relation["buyerId"] = $relation["senderId"];
             break;
         case "3":
             $relation["supplierCode"] = $relation["senderCode"];
             $relation["supplierName"] = $relation["senderName"];
+            $relation["supplierId"] = $relation["senderId"];
             $relation["buyerCode"] = $relation["receiverCode"];
             $relation["buyerName"] = $relation["receiverName"];
+            $relation["buyerId"] = $relation["receiverId"];
             break;
     }
-
     $supplierInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"], "type" => 2]);
     if (empty($supplierInformation)) {
-        $logger->info("Supplier {$relation["supplierCode"]}, {$relation["supplierName"]} doesn't exist at target database. Creating.. ");
+        $logger->warning("Supplier {$relation["supplierCode"]}, {$relation["supplierName"]} doesn't exist at target database. Creating.. ");
         $supplierId = $instanceT->create("party", [
             "identifier" => $relation["supplierCode"],
             "otoedi_code" => $relation["supplierCode"],
             "type" => 2,
-            "name" => mb_substr($relation["supplierName"], 0, 50)
+            "name" => mb_substr($relation["supplierName"], 0, 50),
+            "insert_date" => date("Y-m-d H:i:s", time())
         ]);
         $supplierInformation["party_id"] = $supplierId;
-        $logger->info("Supplier party created with following row id, $supplierId.");
+        $logger->debug("Supplier party created with following row id, $supplierId.");
     }
-
     $buyerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["buyerCode"], "type" => 1]);
     if (empty($buyerInformation)) {
-        $logger->error("Buyer {$relation["buyerCode"]}, {$relation["buyerName"]} doesn't exist at target database. Creating.");
+        $logger->warning("Buyer {$relation["buyerCode"]}, {$relation["buyerName"]} doesn't exist at target database. Creating.");
         $buyerPartyId = $instanceT->create("party", [
             "identifier" => $relation["buyerCode"],
             "otoedi_code" => $relation["buyerCode"],
             "type" => 1,
-            "name" => mb_substr($relation["buyerName"], 0, 50)
+            "name" => mb_substr($relation["buyerName"], 0, 50),
+            "insert_date" => date("Y-m-d H:i:s", time())
         ]);
         $buyerInformation["party_id"] = $buyerPartyId;
-        $logger->info("Related buyer party created with following row id, $buyerPartyId.");
+        $logger->debug("Related buyer party created with following row id, $buyerPartyId.");
+    }
+    $sellerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"]]);
+    if (empty($sellerInformation)) {
+        $logger->warning("Seller  {$relation["supplierCode"]} doesn't exist at target database. Creating.");
+        $sellerPartyId = $instanceT->create("party", [
+            "identifier" => $relation["supplierCode"],
+            "otoedi_code" => $relation["supplierCode"],
+            "type" => 4,
+            "name" => $relation["NAME"],
+            "insert_date" => date("Y-m-d H:i:s", time())
+        ]);
+        $sellerInformation["party_id"] = $sellerPartyId;
+
+        $logger->debug("Related seller party created with following row id, $sellerPartyId.");
     }
 
     $pr = $instanceT->get("party_relation", "pr", [], [
         "fk_buyer_id" => $buyerInformation["party_id"],
         "fk_supplier_id" => $supplierInformation["party_id"]
     ]);
-
     if (empty($pr)) {
         $prId = $instanceT->create("party_relation", [
             "fk_buyer_id" => $buyerInformation["party_id"],
@@ -113,62 +138,41 @@ foreach ($relations as $relation) {
         ]);
         $pr["pr_id"] = $prId;
 
-        $logger->info("Party relation created with row id, $prId.");
+        $logger->debug("Party relation created with row id, $prId.");
     }
 
-    $sellerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"]]);
-    if (empty($sellerInformation)) {
-        $logger->error("Seller  {$relation["supplierCode"]} doesn't exist at target database. Creating.");
-        $sellerPartyId = $instanceT->create("party", [
-            "identifier" => $relation["supplierCode"],
-            "otoedi_code" => $relation["supplierCode"],
-            "type" => 4,
-            "name" => $relation["NAME"]
-        ]);
-        $sellerInformation["party_id"] = $sellerPartyId;
-
-        $logger->info("Related seller party created with following row id, $sellerPartyId.");
-    }
-
+    $logger->notice("Working with relation {$pr["pr_id"]} and document type id {$relation["XDOC_TYPE_ID"]}");
     // ---------------------------------------------------------------------------------------------------------
     $xdocWhere = new Where();
-    $xdocWhere->nest()
-        ->equalTo("PS.EDI_CODE", $otoediCode)
-        ->or
-        ->equalTo("PR.EDI_CODE", $otoediCode)
-        ->unnest();
-    $xdocWhere->equalTo("X.XDOC_TYPE_ID", $relation["XDOC_TYPE_ID"]);
-
-    $getXdocList = $instanceS->get("XDOC", "X", [], $xdocWhere, 5, "X.XDOC_TYPE_ID", [
-        ["name" => ["XT" => "XDOC_TYPE"], "on" => "XT.ID = X.XDOC_TYPE_ID", "columns" => ["TYPE"], "type" => Select::JOIN_LEFT],
-        ["name" => ["PS" => "PARTIES"], "on" => "X.SENDER_PARTY_ID = PS.ID", "columns" => [], "type" => Select::JOIN_LEFT],
-        ["name" => ["PR" => "PARTIES"], "on" => "X.RECEPIENT_PARTY_ID = PR.ID", "columns" => [], "type" => Select::JOIN_LEFT],
+    $xdocWhere->equalTo("X.SENDER_PARTY_ID", $relation["senderId"])
+        ->equalTo("X.RECEPIENT_PARTY_ID", $relation["receiverId"])
+        ->equalTo("X.XDOC_TYPE_ID", $relation["XDOC_TYPE_ID"]);
+    $getXdocList = $instanceS->get("XDOC", "X", [], $xdocWhere, false, "X.XDOC_TYPE_ID", [
+        ["name" => ["XT" => "XDOC_TYPE"], "on" => "XT.ID = X.XDOC_TYPE_ID", "columns" => ["TYPE"], "type" => Select::JOIN_LEFT]
     ], "X.ID");
-
     if (empty($getXdocList)) {
-        $logger->error("Couldnt find any document with type of {$relation["XDOC_TYPE_ID"]}.");
+        $logger->warning("No document. Skipping.");
         continue;
     }
-
+    $logger->info(count($getXdocList) . " documents found.");
     if (!isset($getXdocList[0])) {
         $getXdocList = [$getXdocList];
     }
 
     foreach ($getXdocList as $xdoc) {
-        echo PHP_EOL . PHP_EOL;
-        $connectionT->beginTransaction();
         if (empty($xdoc["TYPE"])) {
-            $logger->error("Cannot identify document type, xdoc id: {$xdoc["ID"]}. Skipping.");
+            $logger->critical("Cannot identify document type, xdoc id: {$xdoc["ID"]}. Aborted.");
             $connectionT->rollback();
             continue;
         }
         try {
+            $releaseNumberSuffix = $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? ("-" . $xdoc["REPLACEMENT_XDOC_ID"]) : null;
             $documentId = $instanceT->create("document", [
                 "fk_pr_id" => $pr["pr_id"],
                 "fk_dt_id" => in_array($xdoc["XDOC_TYPE_ID"], [1, 2]) ? 1 : 2,
                 "type" => $xdoc["TYPE"],
-                "number" => $xdoc["RELEASE_NUMBER"],
-                "control_reference" => $xdoc["RELEASE_NUMBER"],
+                "number" => $xdoc["RELEASE_NUMBER"] . $releaseNumberSuffix,
+                "control_reference" => $xdoc["RELEASE_NUMBER"] . $releaseNumberSuffix,
                 "datetime" => $xdoc["ISSUE_DATE"],
                 "additional_information" => '{"migratedFromV2": "yes","validityPeriod": {"from": "", "until": ""}, "sender_edi_code": "'
                     . $buyerInformation["party_id"] . '", "receiver_edi_code": "'
@@ -177,10 +181,10 @@ foreach ($relations as $relation) {
                 "insert_date" => $xdoc["INSERT_TIME"],
             ]);
 
-            $logger->info("Document created, document id: $documentId, xdoc id: {$xdoc["ID"]}");
+            $logger->debug("Document created, document id: $documentId, xdoc id: {$xdoc["ID"]}");
         } catch (InvalidQueryException $e) {
-            $logger->error("Cannot create document, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
-            continue;
+            $logger->critical("Cannot create document, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
+            die();
         }
         switch ($xdoc["TYPE"]) {
             case "DELFOR":
@@ -188,11 +192,9 @@ foreach ($relations as $relation) {
                     ["name" => ["XD" => "XDOC_DELFOR"], "on" => "XDD.DELFOR_ID = XD.ID", "columns" => ["Snrf", "BeginningInventoryDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode"], "type" => Select::JOIN_LEFT],
                     ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE",], "type" => Select::JOIN_LEFT]
                 ]);
-
                 if (!isset($delforList[0])) {
                     $delforList = [$delforList];
                 }
-
                 try {
                     $orderId = $instanceT->create("order", [
                         "fk_document_id" => $documentId,
@@ -209,14 +211,12 @@ foreach ($relations as $relation) {
                         "seller_identifier" => @$delforList[0]["SellerCode"],
                         "insert_date" => $xdoc["INSERT_TIME"],
                     ]);
-
-                    $logger->info("Order created, order id: $orderId.");
+                    //$logger->debug("Order created, order id: $orderId.");
                 } catch (InvalidQueryException $e) {
-                    $logger->error("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                    $logger->critical("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                     $connectionT->rollback();
-                    continue 2;
+                    die();
                 }
-
                 foreach ($delforList as $i => $line) {
                     $consignee = $instanceT->get("consignee", "c", [], ["identifier" => $line["DeliveryPointCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
                     if (empty($consignee)) {
@@ -228,14 +228,13 @@ foreach ($relations as $relation) {
                             ]);
                             $consignee["consignee_id"] = $consigneeId;
 
-                            $logger->info("Consignee created, consignee id: $consigneeId.");
+                           // $logger->debug("Consignee created, consignee id: $consigneeId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
-
                     if (!empty($line["UnloadingDockCode"])) {
                         $dock = $instanceT->get("dock", "d", ["identifier" => $line["UnloadingDockCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
                         if (empty($dock)) {
@@ -248,15 +247,14 @@ foreach ($relations as $relation) {
                                 ]);
                                 $dock["dock_id"] = $dockId;
 
-                                $logger->info("Dock created, dock id: $dockId.");
+                                //$logger->debug("Dock created, dock id: $dockId.");
                             } catch (InvalidQueryException $e) {
-                                $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                $logger->critical("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                                 $connectionT->rollback();
-                                continue 3;
+                                die();
                             }
                         }
                     }
-
                     $orderConsignee = $instanceT->get("order_consignee", "oc", [], [
                         "fk_order_id" => $orderId,
                         "fk_consignee_id" => $consignee["consignee_id"],
@@ -275,15 +273,14 @@ foreach ($relations as $relation) {
                             ]);
                             $orderConsignee["order_consignee_id"] = $ocId;
 
-                            $logger->info("OC created, oc id: $ocId.");
+                            // $logger->debug("OC created, oc id: $ocId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create oc, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create oc, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
-
-                    $product = $instanceT->get("product", "p", [], ["identifier" => "ItemSenderCode", "fk_supplier_id" => $supplierInformation["party_id"]]);
+                    $product = $instanceT->get("product", "p", [], ["identifier" => $line["ItemSenderCode"], "fk_supplier_id" => $supplierInformation["party_id"]]);
                     if (empty($product)) {
                         try {
                             $productId = $instanceT->create("product", [
@@ -292,12 +289,11 @@ foreach ($relations as $relation) {
                                 "description" => $line["ItemDescription"] ?? null
                             ]);
                             $product["product_id"] = $productId;
-
-                            $logger->info("Product created, id: $productId.");
+                            $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
                     try {
@@ -335,7 +331,6 @@ foreach ($relations as $relation) {
                             "additional_information" => null,
                             "insert_date" => $xdoc["INSERT_TIME"],
                         ]);
-
                         $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELFOR_DETAIL_ID" => $line["ID"]]);
                         if (!isset($matchWithDesadv[0])) {
                             $matchWithDesadv = [$matchWithDesadv];
@@ -352,19 +347,17 @@ foreach ($relations as $relation) {
                                         "original_delivery_date" => @$line["ForecastPeriodStartDate"],
                                     ]);
                                 } catch (InvalidQueryException $e) {
-                                    $logger->error("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                    $logger->critical("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                                     $connectionT->rollback();
-                                    continue 4;
+                                    die();
                                 }
                             }
                         }
-
-                        $logger->info("Line created, id: $orderDetailId.");
-                        echo PHP_EOL;
+                        $logger->debug("Line created, id: $orderDetailId.");
                     } catch (InvalidQueryException $e) {
-                        $logger->error("Cannot create line, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                        $logger->critical("Cannot create line, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                         $connectionT->rollback();
-                        continue 3;
+                        die();
                     }
                 }
                 break;
@@ -381,7 +374,6 @@ foreach ($relations as $relation) {
                         ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_LEFT],
                     ]
                 );
-
                 if (!isset($deljitList[0])) {
                     $deljitList = [$deljitList];
                 }
@@ -403,11 +395,11 @@ foreach ($relations as $relation) {
                         "insert_date" => $xdoc["INSERT_TIME"],
                     ]);
 
-                    $logger->info("Order created, order id: $orderId.");
+                    $logger->debug("Order created, order id: $orderId.");
                 } catch (InvalidQueryException $e) {
-                    $logger->error("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                    $logger->critical("Cannot create Order, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                     $connectionT->rollback();
-                    continue 2;
+                    die();
                 }
 
                 foreach ($deljitList as $line) {
@@ -421,11 +413,11 @@ foreach ($relations as $relation) {
                             ]);
                             $consignee["consignee_id"] = $consigneeId;
 
-                            $logger->info("Consignee created, consignee id: $consigneeId.");
+                            $logger->debug("Consignee created, consignee id: $consigneeId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
 
@@ -441,11 +433,11 @@ foreach ($relations as $relation) {
                                 ]);
                                 $dock["dock_id"] = $dockId;
 
-                                $logger->info("Dock created, dock id: $dockId.");
+                                $logger->debug("Dock created, dock id: $dockId.");
                             } catch (InvalidQueryException $e) {
-                                $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                $logger->critical("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                                 $connectionT->rollback();
-                                continue 3;
+                                die();
                             }
                         }
                     }
@@ -469,15 +461,15 @@ foreach ($relations as $relation) {
                             ]);
                             $orderConsignee["order_consignee_id"] = $ocId;
 
-                            $logger->info("OC created, oc id: $ocId.");
+                            $logger->debug("OC created, oc id: $ocId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create order consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create order consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
 
-                    $product = $instanceT->get("product", "p", [], ["identifier" => "ItemSenderCode", "fk_supplier_id" => $supplierInformation["party_id"]]);
+                    $product = $instanceT->get("product", "p", [], ["identifier" => $line["ItemSenderCode"], "fk_supplier_id" => $supplierInformation["party_id"]]);
                     if (empty($product)) {
                         try {
                             $productId = $instanceT->create("product", [
@@ -486,11 +478,11 @@ foreach ($relations as $relation) {
                                 "description" => $line["ItemDescription"] ?? $line["ItemSenderCode"]
                             ]);
                             $product["product_id"] = $productId;
-                            $logger->info("Product created, id: $productId.");
+                            $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
 
@@ -546,19 +538,18 @@ foreach ($relations as $relation) {
                                         "original_delivery_date" => @$line["ShipScheduleDate"],
                                     ]);
                                 } catch (InvalidQueryException $e) {
-                                    $logger->error("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                                    $logger->critical("Cannot match with a desadv, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                                     $connectionT->rollback();
-                                    continue 4;
+                                    die();
                                 }
                             }
                         }
 
-                        $logger->info("Line created, id: $orderDetailId.");
-                        echo PHP_EOL;
+                        $logger->debug("Line created, id: $orderDetailId.");
                     } catch (InvalidQueryException $e) {
-                        $logger->info("Cannot create order line, id: {$xdoc["ID"]}. Error: {$e->getMessage()}");
+                        $logger->debug("Cannot create order line, id: {$xdoc["ID"]}. Error: {$e->getMessage()}");
                         $connectionT->rollback();
-                        continue 3;
+                        die();
                     }
                 }
                 break;
@@ -582,11 +573,11 @@ foreach ($relations as $relation) {
                         ]);
                         $consignee["consignee_id"] = $consigneeId;
 
-                        $logger->info("Consignee created, consignee id: $consigneeId.");
+                        $logger->debug("Consignee created, consignee id: $consigneeId.");
                     } catch (InvalidQueryException $e) {
-                        $logger->error("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                        $logger->critical("Cannot create consignee, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                         $connectionT->rollback();
-                        continue 2;
+                        die();
                     }
                 }
 
@@ -601,38 +592,78 @@ foreach ($relations as $relation) {
                         ]);
                         $dock["dock_id"] = $dockId;
 
-                        $logger->info("Dock created, dock id: $dockId.");
+                        $logger->debug("Dock created, dock id: $dockId.");
                     } catch (InvalidQueryException $e) {
-                        $logger->error("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Skipping.");
+                        $logger->critical("Cannot create dock, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
                         $connectionT->rollback();
-                        continue 2;
+                        die();
+                    }
+                }
+
+                $shipment = $instanceT->get("shipment", "s", [], ["transport_identifier" => $despatchList[0]["ShipmentNumber"]]);
+                if (empty($shipment)) {
+                    try {
+                        $shipmentId = $instanceT->create("shipment", [
+                            "fk_party_id" => $supplierInformation["party_id"],
+                            "fk_carrier_id" => null,
+                            "is_shipped" => $despatchList[0]["STATUS"] & 8,
+                            "carrier_name" => $despatchList[0]["CarrierName"],
+                            "transport_identifier" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
+                            "transport_identifier_meaning" => 1,
+                            "despatch_datetime" => $despatchList[0]["ShipmentDateTime"],
+                            "arrival_datetime" => $despatchList[0]["EstimatedArrivalDateTime"],
+                            "mode_of_transport" => $despatchList[0]["ModeOfTransport"],
+                            "intermediate_consignee_code" => $despatchList[0]["IntermediateConsigneeCode"],
+                            "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
+                            "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
+                            "weight_unit" => !empty($despatchList[0]["TotalGrossWeightUom"]) ? $despatchList[0]["TotalGrossWeightUom"] : (!empty($despatchList[0]["TotalNetWeightUom"]) ? $despatchList[0]["TotalNetWeightUom"] : "KG"),
+                            "number_of_packages" => null,
+                            "shipment_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
+                            "port_of_loading" => null,
+                            "port_of_discharge" => null,
+                            "shipping_mark1" => null,
+                            "shipping_mark2" => null,
+                            "shipping_mark3" => null,
+                            "shipping_mark4" => null,
+                            "use_system_despatch_date" => 0,
+                            "freight_payment_code" => $despatchList[0]["FreightBillNumber"],
+                            "freight_bill_number_details" => $despatchList[0]["FreightBillNumber"],
+                            "insert_date" => $xdoc["INSERT_TIME"]
+                        ]);
+                        $shipment["shipment_id"] = $shipmentId;
+
+                        $logger->debug("Shipment created, id: $shipmentId");
+                    } catch (InvalidQueryException $e) {
+                        $logger->critical("Cannot create shipment, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Aborted.");
+                        $connectionT->rollback();
+                        die();
                     }
                 }
 
                 try {
                     $despatchId = $instanceT->create("despatch", [
                         "fk_pr_id" => $pr["pr_id"],
-                        "fk_shipment_id" => null,
+                        "fk_shipment_id" => $shipmentId ?? null,
                         "fk_invoicee_id" => null,
                         "fk_consignee_id" => $consignee["consignee_id"],
                         "fk_dock_id" => $dock["dock_id"],
                         "fk_document_id" => $documentId,
-                        "despatch_number" => $despatchList[0]["ShipmentNumber"],
+                        "despatch_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
                         "bill_of_lading_number" => $despatchList[0]["BillOfLadingNumber"],
                         "despatch_date" => $despatchList[0]["ShipmentDateTime"],
                         "arrival_date" => $despatchList[0]["EstimatedArrivalDateTime"],
-                        "gross_weight" => $despatchList[0]["TotalGrossWeight"],
-                        "net_weight" => $despatchList[0]["TotalNetWeight"],
-                        "weight_unit" => $despatchList[0]["TotalGrossWeightUom"],
+                        "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
+                        "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
+                        "weight_unit" => $despatchList[0]["TotalGrossWeightUom"] ?? 'KG',
                         "number_of_packages" => null,
                         "insert_date" => $xdoc["INSERT_TIME"]
                     ]);
 
-                    $logger->info("Despatch created, despatch id: $despatchId.");
+                    $logger->debug("Despatch created, despatch id: $despatchId.");
                 } catch (InvalidQueryException $e) {
-                    $logger->error("Cannot create despatch, {$e->getMessage()} xdoc id: {$xdoc["ID"]}. Skipping.");
+                    $logger->critical("Cannot create despatch, {$e->getMessage()} xdoc id: {$xdoc["ID"]}. Aborted.");
                     $connectionT->rollback();
-                    continue 2;
+                    die();
                 }
 
                 foreach ($despatchList as $line) {
@@ -646,11 +677,11 @@ foreach ($relations as $relation) {
                             ]);
                             $product["product_id"] = $productId;
 
-                            $logger->info("Product created, id: $productId.");
+                            $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
+                            $logger->critical("Cannot create product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Aborted.");
                             $connectionT->rollback();
-                            continue 3;
+                            die();
                         }
                     }
 
@@ -669,58 +700,15 @@ foreach ($relations as $relation) {
                         ]);
                         $instanceT->update("v2_migration", ["despatch_product_id" => $dpId], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]]);
 
-                        $logger->info("Despatch product created. id: $dpId");
-                        echo PHP_EOL;
+                        $logger->debug("Despatch product created. id: $dpId");
                     } catch (InvalidQueryException $e) {
-                        $logger->error("Cannot create despatch product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
+                        $logger->critical("Cannot create despatch product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}, desadvdetail. Aborted.");
                         $connectionT->rollback();
-                        continue 3;
-                    }
-
-                    $shipment = $instanceT->get("shipment", "s", [], ["transport_identifier" => $line["ShipmentNumber"]]);
-                    if (empty($shipment)) {
-                        try {
-                            $shipmentId = $instanceT->create("shipment", [
-                                "fk_party_id" => $supplierInformation["party_id"],
-                                "fk_carrier_id" => null,
-                                "is_shipped" => $line["STATUS"] & 8,
-                                "carrier_name" => $line["CarrierName"],
-                                "transport_identifier" => $line["ShipmentNumber"],
-                                "transport_identifier_meaning" => 1,
-                                "despatch_datetime" => $line["ShipmentDateTime"],
-                                "arrival_datetime" => $line["EstimatedArrivalDateTime"],
-                                "mode_of_transport" => $line["ModeOfTransport"],
-                                "intermediate_consignee_code" => $line["IntermediateConsigneeCode"],
-                                "gross_weight" => $line["TotalGrossWeight"],
-                                "net_weight" => $line["TotalNetWeight"],
-                                "weight_unit" => !empty($line["TotalGrossWeightUom"]) ? $line["TotalGrossWeightUom"] : $line["TotalNetWeightUom"],
-                                "number_of_packages" => null,
-                                "shipment_number" => $line["ShipmentNumber"],
-                                "port_of_loading" => null,
-                                "port_of_discharge" => null,
-                                "shipping_mark1" => null,
-                                "shipping_mark2" => null,
-                                "shipping_mark3" => null,
-                                "shipping_mark4" => null,
-                                "use_system_despatch_date" => 0,
-                                "freight_payment_code" => $line["FreightBillNumber"],
-                                "freight_bill_number_details" => $line["FreightBillNumber"],
-                                "insert_date" => $xdoc["INSERT_TIME"]
-                            ]);
-                            $shipment["shipment_id"] = $shipmentId;
-
-                            $logger->info("Shipment created, id: $shipmentId");
-                            echo PHP_EOL;
-                        } catch (InvalidQueryException $e) {
-                            $logger->error("Cannot create shipment, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Skipping.");
-                            $connectionT->rollback();
-                            continue 3;
-                        }
+                        die();
                     }
                 }
                 break;
         }
-        $connectionT->commit();
     }
 
     $deljitShipmentCumulativeWhere = new Where();
@@ -730,7 +718,7 @@ foreach ($relations as $relation) {
     $deljitShipmentCumulativeColumns = [
         "LastAsnShipmentCumulativeQuantity" => new Expression("MAX(deld.LastAsnShipmentCumulativeQuantity)"),
         "ItemSenderCode",
-        "deld.ID"
+        "ID"
     ];
     $deljitShipmentCumulative = $instanceS->get("XDOC_DELJIT_DETAIL", "deld", $deljitShipmentCumulativeColumns, $deljitShipmentCumulativeWhere, false, false, [
         ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
@@ -751,7 +739,6 @@ foreach ($relations as $relation) {
             "fk_consignee_id" => $findRelation["fk_consignee_id"]
         ]);
     }
-
     $deljitReceivedCumulativeWhere = new Where();
     $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["party_id"])
         ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["party_id"]);
@@ -764,14 +751,13 @@ foreach ($relations as $relation) {
         ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
         ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
     ], "deld.ItemSenderCode");
-    foreach ($deljitShipmentCumulative as $deljitShipment) {
-        $findRelation = $instanceT->get("v2_migration", "m", [], ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"], false, false, [
+    foreach ($deljitReceivedCumulative as $deljitReceived) {
+        $findRelation = $instanceT->get("v2_migration", "m", [], ["XDOC_DELJIT_DETAIL_ID" => $deljitReceived["ID"], false, false, [
             ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
             ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
         ]]);
-
         $instanceT->update("cumulative", [
-            "current_acknowledged" => $deljitShipment["LastReceivedCumulativeQuantity"]
+            "current_acknowledged" => $deljitReceived["LastReceivedCumulativeQuantity"]
         ], [
             "fk_product_id" => $findRelation["fk_product_id"],
             "fk_party_id" => $supplierInformation["party_id"],
@@ -779,28 +765,4 @@ foreach ($relations as $relation) {
         ]);
     }
 }
-
-
-/*
- select max(deld.LastAsnShipmentCumulativeQuantity),
-            deld.ItemSenderCode
-     from XDOC_DELJIT_DETAIL deld
-              inner join XDOC on deld.XDOC_ID = XDOC.ID
-              inner join XDOC_DESADV des on deld.LastDeliveredDesadvID = des.ID
-              inner join XDOC desdoc on des.XDOC_ID = desdoc.ID
-     where XDOC.SENDER_PARTY_ID = :senderId
-       and XDOC.RECEPIENT_PARTY_ID = :recipientId
-       and desdoc.STATUS & 8  group by deld.ItemSenderCode;
-
-
- select max(deld.LastReceivedCumulativeQuantity),
-            deld.ItemSenderCode
-     from XDOC_DELJIT_DETAIL deld
-              inner join XDOC on deld.XDOC_ID = XDOC.ID
-              inner join XDOC_DESADV des on deld.LastDeliveredDesadvID = des.ID
-              inner join XDOC desdoc on des.XDOC_ID = desdoc.ID
-     where XDOC.SENDER_PARTY_ID = :senderId
-       and XDOC.RECEPIENT_PARTY_ID = :recipientId
-       group by deld.ItemSenderCode;
-
- */
+$connectionT->commit();
