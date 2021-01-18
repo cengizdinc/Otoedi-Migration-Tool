@@ -10,9 +10,9 @@
   "target": {
     "driver": "Pdo_Mysql",
     "database": "otoedi_v3",
-    "username": "root",
-    "password": "a!S45?123a!S45?123a!S45?123a!S45?123",
-    "hostname": "10.6.1.140",
+    "username": "remoteroot",
+    "password": "GPOt*AAI.B9H,OK=",
+    "hostname": "10.1.1.90",
     "charset": "UTF8"
   }
 }
