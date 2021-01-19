@@ -35,8 +35,8 @@ try {
     die("Log configuration is invalid : {$e->getMessage()}" . PHP_EOL);
 }
 
- echo "Please type source party code to be migrated: ";
- $otoediCode = trim(fgets(STDIN));
+echo "Please type source party code to be migrated: ";
+$otoediCode = trim(fgets(STDIN));
 // ---------------------------------------------------------------------------------------------------------------------
 $dbConfig = json_decode(file_get_contents(__DIR__ . "/config/db.config.json"));
 !empty($dbConfig) or die('Can not be found the configuration parameters!');
@@ -92,64 +92,65 @@ foreach ($relations as $relation) {
         $supplierId = $instanceT->create(
             "party",
             [
-            "identifier" => $relation["supplierCode"],
-            "otoedi_code" => $relation["supplierCode"],
-            "type" => 2,
-            "name" => mb_substr($relation["supplierName"], 0, 50),
-            "insert_date" => date("Y-m-d H:i:s", time())
+                "identifier" => $relation["supplierCode"],
+                "otoedi_code" => $relation["supplierCode"],
+                "type" => 2,
+                "name" => mb_substr($relation["supplierName"], 0, 50),
+                "insert_date" => date("Y-m-d H:i:s", time())
             ]
         );
         $supplierInformation["party_id"] = $supplierId;
         $logger->debug("Supplier party created with following row id, $supplierId.");
     }
+    $supplierInformation["migratedID"] = $relation["supplierId"];
     $buyerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["buyerCode"], "type" => 1]);
     if (empty($buyerInformation)) {
         $logger->warning("Buyer {$relation["buyerCode"]}, {$relation["buyerName"]} doesn't exist at target database. Creating.");
         $buyerPartyId = $instanceT->create(
             "party",
             [
-            "identifier" => $relation["buyerCode"],
-            "otoedi_code" => $relation["buyerCode"],
-            "type" => 1,
-            "name" => mb_substr($relation["buyerName"], 0, 50),
-            "insert_date" => date("Y-m-d H:i:s", time())
+                "identifier" => $relation["buyerCode"],
+                "otoedi_code" => $relation["buyerCode"],
+                "type" => 1,
+                "name" => mb_substr($relation["buyerName"], 0, 50),
+                "insert_date" => date("Y-m-d H:i:s", time())
             ]
         );
         $buyerInformation["party_id"] = $buyerPartyId;
         // $logger->debug("Related buyer party created with following row id, $buyerPartyId.");
     }
+    $buyerInformation["migratedID"] = $relation["buyerId"];
     $sellerInformation = $instanceT->get("party", "p", [], ["otoedi_code" => $relation["supplierCode"]]);
     if (empty($sellerInformation)) {
         $logger->warning("Seller  {$relation["supplierCode"]} doesn't exist at target database. Creating.");
         $sellerPartyId = $instanceT->create(
             "party",
             [
-            "identifier" => $relation["supplierCode"],
-            "otoedi_code" => $relation["supplierCode"],
-            "type" => 4,
-            "name" => $relation["NAME"],
-            "insert_date" => date("Y-m-d H:i:s", time())
+                "identifier" => $relation["supplierCode"],
+                "otoedi_code" => $relation["supplierCode"],
+                "type" => 4,
+                "name" => $relation["NAME"],
+                "insert_date" => date("Y-m-d H:i:s", time())
             ]
         );
         $sellerInformation["party_id"] = $sellerPartyId;
         // $logger->debug("Related seller party created with following row id, $sellerPartyId.");
     }
-
     $pr = $instanceT->get(
         "party_relation",
         "pr",
         [],
         [
-        "fk_buyer_id" => $buyerInformation["party_id"],
-        "fk_supplier_id" => $supplierInformation["party_id"]
+            "fk_buyer_id" => $buyerInformation["party_id"],
+            "fk_supplier_id" => $supplierInformation["party_id"]
         ]
     );
     if (empty($pr)) {
         $prId = $instanceT->create(
             "party_relation",
             [
-            "fk_buyer_id" => $buyerInformation["party_id"],
-            "fk_supplier_id" => $supplierInformation["party_id"]
+                "fk_buyer_id" => $buyerInformation["party_id"],
+                "fk_supplier_id" => $supplierInformation["party_id"]
             ]
         );
         $pr["pr_id"] = $prId;
@@ -162,7 +163,8 @@ foreach ($relations as $relation) {
     $xdocWhere = new Where();
     $xdocWhere->equalTo("X.SENDER_PARTY_ID", $relation["senderId"])
         ->equalTo("X.RECEPIENT_PARTY_ID", $relation["receiverId"])
-        ->equalTo("X.XDOC_TYPE_ID", $relation["XDOC_TYPE_ID"]);
+        ->equalTo("X.XDOC_TYPE_ID", $relation["XDOC_TYPE_ID"])
+        ->lessThan("X.STATUS", "32");
     $getXdocList = $instanceS->get(
         "XDOC",
         "X",
@@ -171,7 +173,7 @@ foreach ($relations as $relation) {
         false,
         "X.XDOC_TYPE_ID",
         [
-        ["name" => ["XT" => "XDOC_TYPE"], "on" => "XT.ID = X.XDOC_TYPE_ID", "columns" => ["TYPE"], "type" => Select::JOIN_LEFT]
+            ["name" => ["XT" => "XDOC_TYPE"], "on" => "XT.ID = X.XDOC_TYPE_ID", "columns" => ["TYPE"], "type" => Select::JOIN_LEFT]
         ],
         "X.ID"
     );
@@ -183,7 +185,6 @@ foreach ($relations as $relation) {
     if (!isset($getXdocList[0])) {
         $getXdocList = [$getXdocList];
     }
-
     $xdocTotal = count($getXdocList);
     $xdocCounter = 1;
     foreach ($getXdocList as $xdoc) {
@@ -196,20 +197,25 @@ foreach ($relations as $relation) {
         }
         try {
             $releaseNumberSuffix = $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? ("-" . $xdoc["REPLACEMENT_XDOC_ID"]) : null;
+            $xmlPath = basename($xdoc["XML_PATH"]);
+            $ediPath = basename($xdoc["EDI_PATH"]);
+            $currentPath = "/var/www/data/000_backendApps/v3.otoedi.com/arc/";
+            $originalPath = "/var/www/data/000_backendApps/v3.otoedi.com/org/";
             $documentId = $instanceT->create(
                 "document",
                 [
-                "fk_pr_id" => $pr["pr_id"],
-                "fk_dt_id" => in_array($xdoc["XDOC_TYPE_ID"], [1, 2]) ? 1 : 2,
-                "type" => $xdoc["TYPE"],
-                "number" => $xdoc["RELEASE_NUMBER"] . $releaseNumberSuffix,
-                "control_reference" => $xdoc["RELEASE_NUMBER"],
-                "datetime" => $xdoc["ISSUE_DATE"],
-                "additional_information" => '{"migratedFromV2": "yes","validityPeriod": {"from": "", "until": ""}, "sender_edi_code": "'
-                    . $buyerInformation["party_id"] . '", "receiver_edi_code": "'
-                    . $supplierInformation["party_id"] . '"}',
-                "original_filename" => $xdoc["XML_PATH"],
-                "insert_date" => $xdoc["INSERT_TIME"],
+                    "fk_pr_id" => $pr["pr_id"],
+                    "fk_dt_id" => in_array($xdoc["XDOC_TYPE_ID"], [1, 2]) ? 1 : 2,
+                    "type" => $xdoc["TYPE"],
+                    "number" => $xdoc["RELEASE_NUMBER"] . $releaseNumberSuffix,
+                    "control_reference" => $xdoc["RELEASE_NUMBER"],
+                    "datetime" => $xdoc["ISSUE_DATE"],
+                    "additional_information" => '{"migratedFromV2": "yes","validityPeriod": {"from": "", "until": ""}, "sender_edi_code": "'
+                        . $buyerInformation["party_id"] . '", "receiver_edi_code": "'
+                        . $supplierInformation["party_id"] . '"}',
+                    "original_filename" => $originalPath . $ediPath,
+                    "current_path" => $currentPath . $xmlPath,
+                    "insert_date" => $xdoc["INSERT_TIME"],
                 ]
             );
 
@@ -228,8 +234,11 @@ foreach ($relations as $relation) {
                     false,
                     false,
                     [
-                    ["name" => ["XD" => "XDOC_DELFOR"], "on" => "XDD.DELFOR_ID = XD.ID", "columns" => ["Snrf", "BeginningInventoryDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode"], "type" => Select::JOIN_LEFT],
-                    ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE",], "type" => Select::JOIN_LEFT]
+                        ["name" => ["XD" => "XDOC_DELFOR"], "on" => "XDD.DELFOR_ID = XD.ID", "columns" => ["Snrf", "BeginningInventoryDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE",], "type" => Select::JOIN_LEFT],
+                        ["name" => ["DD" => "DESADV_DELJIT"], "on" => "XDD.ID = DD.XDOC_DELFOR_DETAIL_ID", "columns" => ["XDOC_DESADV_DETAIL_ID"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XDESD" => "XDOC_DESADV_DETAIL"], "on" => "XDESD.ID = DD.XDOC_DESADV_DETAIL_ID", "columns" => ["ScheduleQuantity"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XDESDX" => "XDOC"], "on" => "XDESD.XDOC_ID = XDESDX.ID", "columns" => ["DesadvStatus" => "STATUS"], "type" => Select::JOIN_LEFT],
                     ]
                 );
                 if (!isset($delforList[0])) {
@@ -239,20 +248,20 @@ foreach ($relations as $relation) {
                     $orderId = $instanceT->create(
                         "order",
                         [
-                        "fk_document_id" => $documentId,
-                        "fk_pr_id" => $pr["pr_id"],
-                        "order_number" => !empty($delforList[0]["Snrf"]) ? $delforList[0]["Snrf"] : $xdoc["RELEASE_NUMBER"],
-                        "order_date" => $xdoc["ISSUE_DATE"],
-                        "horizon_start_date" => $delforList[0]["BeginningInventoryDate"] == "0000-00-00" ? null : @$delforList[0]["BeginningInventoryDate"],
-                        "horizon_end_date" => $delforList[0]["HorizonEndDate"] == "0000-00-00" ? null : @$delforList[0]["HorizonEndDate"],
-                        "fk_buyer_id" => $buyerInformation["party_id"],
-                        "buyer_identifier" => @$delforList[0]["BuyerCode"],
-                        "fk_supplier_id" => $supplierInformation["party_id"],
-                        "supplier_identifier" => @$delforList[0]["SupplierCode"],
-                        "fk_seller_id" => $supplierInformation["party_id"],
-                        "seller_identifier" => @$delforList[0]["SellerCode"],
-                        "insert_date" => $xdoc["INSERT_TIME"],
-                        "is_confirmed" => 1
+                            "fk_document_id" => $documentId,
+                            "fk_pr_id" => $pr["pr_id"],
+                            "order_number" => !empty($delforList[0]["Snrf"]) ? $delforList[0]["Snrf"] : $xdoc["RELEASE_NUMBER"],
+                            "order_date" => $xdoc["ISSUE_DATE"],
+                            "horizon_start_date" => $delforList[0]["BeginningInventoryDate"] == "0000-00-00" ? null : @$delforList[0]["BeginningInventoryDate"],
+                            "horizon_end_date" => $delforList[0]["HorizonEndDate"] == "0000-00-00" ? null : @$delforList[0]["HorizonEndDate"],
+                            "fk_buyer_id" => $buyerInformation["party_id"],
+                            "buyer_identifier" => @$delforList[0]["BuyerCode"],
+                            "fk_supplier_id" => $supplierInformation["party_id"],
+                            "supplier_identifier" => @$delforList[0]["SupplierCode"],
+                            "fk_seller_id" => $supplierInformation["party_id"],
+                            "seller_identifier" => @$delforList[0]["SellerCode"],
+                            "insert_date" => $xdoc["INSERT_TIME"],
+                            "is_confirmed" => 1
                         ]
                     );
                     //$logger->debug("Order created, order id: $orderId.");
@@ -261,16 +270,23 @@ foreach ($relations as $relation) {
                     $connectionT->rollback();
                     die();
                 }
+                $isCompleted = 1;
+                foreach ($delforList as $item) {
+                    if ($item["ForecastNetQuantity"] != $item["ForecastDeliveredQuantity"]) {
+                        $isCompleted = 0;
+                        break;
+                    }
+                }
                 foreach ($delforList as $i => $line) {
-                    $consignee = $instanceT->get("consignee", "c", [], ["identifier" => $line["DeliveryPointCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
+                    $consignee = $instanceT->get("consignee", "c", [], ["identifier" => str_replace("&amp;", "&", $line["DeliveryPointCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
                     if (empty($consignee)) {
                         try {
                             $consigneeId = $instanceT->create(
                                 "consignee",
                                 [
-                                "fk_buyer_id" => $buyerInformation["party_id"],
-                                "identifier" => $line["DeliveryPointCode"],
-                                "name" => $line["DeliveryPointCode"],
+                                    "fk_buyer_id" => $buyerInformation["party_id"],
+                                    "identifier" => str_replace("&amp;", "&", $line["DeliveryPointCode"]),
+                                    "name" => str_replace("&amp;", "&", $line["DeliveryPointCode"]),
                                 ]
                             );
                             $consignee["consignee_id"] = $consigneeId;
@@ -283,16 +299,16 @@ foreach ($relations as $relation) {
                         }
                     }
                     if (!empty($line["UnloadingDockCode"])) {
-                        $dock = $instanceT->get("dock", "d", ["identifier" => $line["UnloadingDockCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
-                        if (empty($dock)) {
+                        $dock = $instanceT->get("dock", "d", ["identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
+                        if (empty($dock) and !empty($line["UnloadingDockCode"]) and strlen($line["UnloadingDockCode"]) > 0) {
                             try {
                                 $dockId = $instanceT->create(
-                                    "consignee",
+                                    "dock",
                                     [
-                                    "fk_buyer_id" => $buyerInformation["party_id"],
-                                    "fk_consignee_id" => $consignee["consignee_id"],
-                                    "identifier" => $line["UnloadingDockCode"],
-                                    "name" => $line["UnloadingDockCode"],
+                                        "fk_buyer_id" => $buyerInformation["party_id"],
+                                        "fk_consignee_id" => $consignee["consignee_id"],
+                                        "identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]),
+                                        "name" => str_replace("&amp;", "&", $line["UnloadingDockCode"]),
                                     ]
                                 );
                                 $dock["dock_id"] = $dockId;
@@ -310,12 +326,12 @@ foreach ($relations as $relation) {
                         "oc",
                         [],
                         [
-                        "fk_order_id" => $orderId,
-                        "fk_consignee_id" => $consignee["consignee_id"],
-                        "fk_dock_id" => $dock["dock_id"] ?? null,
-                        "consignee_identifier" => $line["DeliveryPointCode"],
-                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : $line["DeliveryPointCode"],
-                        "is_replaced" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
+                            "fk_order_id" => $orderId,
+                            "fk_consignee_id" => $consignee["consignee_id"],
+                            "fk_dock_id" => $dock["dock_id"] ?? null,
+                            "consignee_identifier" => $line["DeliveryPointCode"],
+                            "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : $line["DeliveryPointCode"],
+                            "is_replaced" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
                         ]
                     );
                     if (empty($orderConsignee)) {
@@ -323,13 +339,13 @@ foreach ($relations as $relation) {
                             $ocId = $instanceT->create(
                                 "order_consignee",
                                 [
-                                "fk_order_id" => $orderId,
-                                "fk_consignee_id" => $consignee["consignee_id"],
-                                "fk_dock_id" => $dock["dock_id"] ?? null,
-                                "consignee_identifier" => $line["DeliveryPointCode"],
-                                "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : $line["DeliveryPointCode"],
-                                "is_completed" => 1,
-                                "type" => "forecast"
+                                    "fk_order_id" => $orderId,
+                                    "fk_consignee_id" => $consignee["consignee_id"],
+                                    "fk_dock_id" => $dock["dock_id"] ?? null,
+                                    "consignee_identifier" => $line["DeliveryPointCode"],
+                                    "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : $line["DeliveryPointCode"],
+                                "is_completed" => $isCompleted,
+                                    "type" => "forecast"
                                 ]
                             );
                             $orderConsignee["order_consignee_id"] = $ocId;
@@ -348,9 +364,9 @@ foreach ($relations as $relation) {
                             $productId = $instanceT->create(
                                 "product",
                                 [
-                                "fk_supplier_id" => $supplierInformation["party_id"],
-                                "identifier" => $productIdentifier,
-                                "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "fk_supplier_id" => $supplierInformation["party_id"],
+                                    "identifier" => $productIdentifier,
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
                                 ]
                             );
                             $product["product_id"] = $productId;
@@ -366,39 +382,40 @@ foreach ($relations as $relation) {
                         $orderDetailId = $instanceT->create(
                             "order_line",
                             [
-                            "fk_order_consignee_id" => $orderConsignee["order_consignee_id"],
-                            "fk_order_id" => $orderId,
-                            "fk_product_id" => $product["product_id"],
-                            "line_number" => $line["SchedulingConditionId"],
-                            "release_number" => 0,
-                            "identifier" => !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"],
-                            "description" => $line["ItemDescription"] ?? null,
-                            "buyer_code" => $line["ItemSenderCode"],
-                            "supplier_code" => $line["ItemReceiverCode"] ?? null,
-                            "delivery_call_number" => null,
-                            "contract_number" => null,
-                            "earliest_datetime" => $line["ForecastPeriodStartDate"],
-                            "latest_datetime" => $line["HorizonEndDate"] == "0000-00-00" ? null : $line["HorizonEndDate"],
-                            "collection_datetime_earliest" => null,
-                            "collection_datetime_latest" => null,
-                            "last_despatch_datetime" => $line["LastAsnShipmentDate"] == "0000-00-00" ? null : $line["LastAsnShipmentDate"],
-                            "order_status" => "forecast",
-                            "quantity_original" => $line["ForecastNetQuantity"],
-                            "quantity_confirmed" => $line["ForecastNetQuantity"], // !empty($line["approveduserid"]) ? $line["ForecastNetQuantity"] : 0,
-                            "quantity_packing" => 0,
-                            "quantity_packed" => 0,
-                            "quantity_to_be_shipped" => 0,
-                            "quantity_shipped" => $line["ForecastDeliveredQuantity"],
-                            "quantity_invoiced" => 0,
-                            "unit_quantity" => $line["ForecastNetQuantityUom"],
-                            "unit_price" => 0,
-                            "unit_price_basis" => null,
-                            "line_amount" => null,
-                            "unit_price_currency" => null,
-                            "original_delivery_date" => $line["ForecastPeriodStartDate"],
-                            "additional_information" => null,
-                            "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
-                            "insert_date" => $xdoc["INSERT_TIME"],
+                                "fk_order_consignee_id" => $orderConsignee["order_consignee_id"],
+                                "fk_order_id" => $orderId,
+                                "fk_product_id" => $product["product_id"],
+                                "line_number" => $line["SchedulingConditionId"],
+                                "release_number" => 0,
+                                "identifier" => !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"],
+                                "description" => $line["ItemDescription"] ?? null,
+                                "buyer_code" => $line["ItemSenderCode"],
+                                "supplier_code" => $line["ItemReceiverCode"] ?? null,
+                                "delivery_call_number" => null,
+                                "contract_number" => null,
+                                "earliest_datetime" => $line["ForecastPeriodStartDate"],
+                                "latest_datetime" => $line["HorizonEndDate"] == "0000-00-00" ? null : $line["HorizonEndDate"],
+                                "collection_datetime_earliest" => null,
+                                "collection_datetime_latest" => null,
+                                "last_despatch_datetime" => $line["LastAsnShipmentDate"] == "0000-00-00" ? null : $line["LastAsnShipmentDate"],
+                                "order_status" => "forecast",
+                                "quantity_original" => $line["ForecastNetQuantity"],
+                                "quantity_confirmed" => $line["ForecastNetQuantity"], // !empty($line["approveduserid"]) ? $line["ForecastNetQuantity"] : 0,
+                                "quantity_packing" => 0,
+                                "quantity_packed" => 0,
+                                "quantity_to_be_shipped" => 0,
+                                "quantity_shipped" => $line["ForecastDeliveredQuantity"],
+                                "quantity_invoiced" => 0,
+                                "unit_quantity" => $line["ForecastNetQuantityUom"],
+                                "unit_price" => 0,
+                                "unit_price_basis" => null,
+                                "line_amount" => null,
+                                "unit_price_currency" => null,
+                                "original_delivery_date" => $line["ForecastPeriodStartDate"],
+                                "additional_information" => null,
+                                "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
+                                "insert_date" => $xdoc["INSERT_TIME"],
+                                "confirmed_date" => $xdoc["INSERT_TIME"]
                             ]
                         );
                         $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELFOR_DETAIL_ID" => $line["ID"]]);
@@ -411,12 +428,12 @@ foreach ($relations as $relation) {
                                     $instanceT->create(
                                         "v2_migration",
                                         [
-                                        "order_line_id" => $orderDetailId,
-                                        "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
-                                        "XDOC_DELFOR_DETAIL_ID" => $line["ID"],
-                                        "consignee_identifier" => @$line["DeliveryPointCode"],
-                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
-                                        "original_delivery_date" => @$line["ForecastPeriodStartDate"],
+                                            "order_line_id" => $orderDetailId,
+                                            "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
+                                            "XDOC_DELFOR_DETAIL_ID" => $line["ID"],
+                                            "consignee_identifier" => @$line["DeliveryPointCode"],
+                                            "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                            "original_delivery_date" => @$line["ForecastPeriodStartDate"],
                                         ]
                                     );
                                 } catch (InvalidQueryException $e) {
@@ -443,8 +460,11 @@ foreach ($relations as $relation) {
                     false,
                     false,
                     [
-                    ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XDD.DELJIT_ID = XD.ID", "columns" => ["Snrf", "HorizonStartDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode", "ShipToCode"], "type" => Select::JOIN_LEFT],
-                    ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XDD.DELJIT_ID = XD.ID", "columns" => ["Snrf", "HorizonStartDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode", "ShipToCode"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_LEFT],
+                        ["name" => ["DD" => "DESADV_DELJIT"], "on" => "XDD.ID = DD.XDOC_DELJIT_DETAIL_ID", "columns" => ["XDOC_DESADV_DETAIL_ID"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XDESD" => "XDOC_DESADV_DETAIL"], "on" => "XDESD.ID = DD.XDOC_DESADV_DETAIL_ID", "columns" => [], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XDESDX" => "XDOC"], "on" => "XDESD.XDOC_ID = XDESDX.ID", "columns" => ["DesadvStatus" => "STATUS"], "type" => Select::JOIN_LEFT],
                     ]
                 );
                 if (!isset($deljitList[0])) {
@@ -455,20 +475,20 @@ foreach ($relations as $relation) {
                     $orderId = $instanceT->create(
                         "order",
                         [
-                        "fk_document_id" => $documentId,
-                        "fk_pr_id" => $pr["pr_id"],
-                        "order_number" => !empty($deljitList[0]["PurchaseOrderNumber"]) ? $deljitList[0]["PurchaseOrderNumber"] : $xdoc["RELEASE_NUMBER"],
-                        "order_date" => $xdoc["ISSUE_DATE"] != "0000-00-00" ? $xdoc["ISSUE_DATE"] : null,
-                        "horizon_start_date" => $deljitList[0]["HorizonStartDate"] != "0000-00-00" ? @$deljitList[0]["HorizonStartDate"] : null,
-                        "horizon_end_date" => $deljitList[0]["HorizonEndDate"] != "0000-00-00" ? @$deljitList[0]["HorizonEndDate"] : null,
-                        "fk_buyer_id" => $buyerInformation["party_id"],
-                        "buyer_identifier" => @$deljitList[0]["BuyerCode"],
-                        "fk_supplier_id" => $supplierInformation["party_id"],
-                        "supplier_identifier" => @$deljitList[0]["SupplierCode"],
-                        "fk_seller_id" => $supplierInformation["party_id"],
-                        "seller_identifier" => @$deljitList[0]["SellerCode"],
-                        "insert_date" => $xdoc["INSERT_TIME"],
-                        "is_confirmed" => 1
+                            "fk_document_id" => $documentId,
+                            "fk_pr_id" => $pr["pr_id"],
+                            "order_number" => !empty($deljitList[0]["PurchaseOrderNumber"]) ? $deljitList[0]["PurchaseOrderNumber"] : $xdoc["RELEASE_NUMBER"],
+                            "order_date" => $xdoc["ISSUE_DATE"] != "0000-00-00" ? $xdoc["ISSUE_DATE"] : null,
+                            "horizon_start_date" => $deljitList[0]["HorizonStartDate"] != "0000-00-00" ? @$deljitList[0]["HorizonStartDate"] : null,
+                            "horizon_end_date" => $deljitList[0]["HorizonEndDate"] != "0000-00-00" ? @$deljitList[0]["HorizonEndDate"] : null,
+                            "fk_buyer_id" => $buyerInformation["party_id"],
+                            "buyer_identifier" => @$deljitList[0]["BuyerCode"],
+                            "fk_supplier_id" => $supplierInformation["party_id"],
+                            "supplier_identifier" => @$deljitList[0]["SupplierCode"],
+                            "fk_seller_id" => $supplierInformation["party_id"],
+                            "seller_identifier" => @$deljitList[0]["SellerCode"],
+                            "insert_date" => $xdoc["INSERT_TIME"],
+                            "is_confirmed" => 1
                         ]
                     );
 
@@ -478,17 +498,23 @@ foreach ($relations as $relation) {
                     $connectionT->rollback();
                     die();
                 }
-
+                $isCompleted = 1;
+                foreach ($deljitList as $item) {
+                    if ($item["ScheduleQuantity"] != $item["DeliveredQuantity"]) {
+                        $isCompleted = 0;
+                        break;
+                    }
+                }
                 foreach ($deljitList as $line) {
-                    $consignee = $instanceT->get("consignee", "c", [], ["identifier" => $deljitList[0]["ShipToCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
+                    $consignee = $instanceT->get("consignee", "c", [], ["identifier" => str_replace("&amp;", "&", $deljitList[0]["ShipToCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
                     if (empty($consignee)) {
                         try {
                             $consigneeId = $instanceT->create(
                                 "consignee",
                                 [
-                                "fk_buyer_id" => $buyerInformation["party_id"],
-                                "identifier" => $deljitList[0]["ShipToCode"],
-                                "name" => $deljitList[0]["ShipToCode"],
+                                    "fk_buyer_id" => $buyerInformation["party_id"],
+                                    "identifier" => str_replace("&amp;", "&", $deljitList[0]["ShipToCode"]),
+                                    "name" => str_replace("&amp;", "&", $deljitList[0]["ShipToCode"]),
                                 ]
                             );
                             $consignee["consignee_id"] = $consigneeId;
@@ -499,18 +525,17 @@ foreach ($relations as $relation) {
                             die();
                         }
                     }
-
                     if (!empty($deljitList["UnloadingDockCode"])) {
-                        $dock = $instanceT->get("dock", "d", [], ["identifier" => $line["UnloadingDockCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
-                        if (empty($dock)) {
+                        $dock = $instanceT->get("dock", "d", [], ["identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
+                        if (empty($dock) and !empty($line["UnloadingDockCode"]) and strlen($line["UnloadingDockCode"])) {
                             try {
                                 $dockId = $instanceT->create(
-                                    "consignee",
+                                    "dock",
                                     [
-                                    "fk_buyer_id" => $buyerInformation["party_id"],
-                                    "fk_consignee_id" => $consignee["consignee_id"],
-                                    "identifier" => $line["UnloadingDockCode"],
-                                    "name" => $line["UnloadingDockCode"],
+                                        "fk_buyer_id" => $buyerInformation["party_id"],
+                                        "fk_consignee_id" => $consignee["consignee_id"],
+                                        "identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]),
+                                        "name" => str_replace("&amp;", "&", $line["UnloadingDockCode"]),
                                     ]
                                 );
                                 $dock["dock_id"] = $dockId;
@@ -527,11 +552,11 @@ foreach ($relations as $relation) {
                         "oc",
                         [],
                         [
-                        "fk_order_id" => $orderId,
-                        "fk_consignee_id" => $consignee["consignee_id"],
-                        "fk_dock_id" => $dock["dock_id"] ?? null,
-                        "consignee_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
-                        "dock_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
+                            "fk_order_id" => $orderId,
+                            "fk_consignee_id" => $consignee["consignee_id"],
+                            "fk_dock_id" => $dock["dock_id"] ?? null,
+                            "consignee_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
+                            "dock_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
                         ]
                     );
                     if (empty($orderConsignee)) {
@@ -539,13 +564,13 @@ foreach ($relations as $relation) {
                             $ocId = $instanceT->create(
                                 "order_consignee",
                                 [
-                                "fk_order_id" => $orderId,
-                                "fk_consignee_id" => $consignee["consignee_id"],
-                                "fk_dock_id" => $dock["dock_id"] ?? null,
-                                "consignee_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
-                                "dock_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
-                                "is_completed" => 1,
-                                "type" => "firm"
+                                    "fk_order_id" => $orderId,
+                                    "fk_consignee_id" => $consignee["consignee_id"],
+                                    "fk_dock_id" => $dock["dock_id"] ?? null,
+                                    "consignee_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
+                                    "dock_identifier" => !empty($line["ShipToCode"]) ? $line["ShipToCode"] : $relation["buyerCode"],
+                                    "is_completed" => $isCompleted,
+                                    "type" => "firm"
                                 ]
                             );
                             $orderConsignee["order_consignee_id"] = $ocId;
@@ -564,9 +589,9 @@ foreach ($relations as $relation) {
                             $productId = $instanceT->create(
                                 "product",
                                 [
-                                "fk_supplier_id" => $supplierInformation["party_id"],
-                                "identifier" => $productIdentifier,
-                                "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "fk_supplier_id" => $supplierInformation["party_id"],
+                                    "identifier" => $productIdentifier,
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
                                 ]
                             );
                             $productIdentifier = null;
@@ -582,39 +607,40 @@ foreach ($relations as $relation) {
                         $orderDetailId = $instanceT->create(
                             "order_line",
                             [
-                            "fk_order_consignee_id" => $orderConsignee["order_consignee_id"],
-                            "fk_order_id" => $orderId,
-                            "fk_product_id" => $product["product_id"],
-                            "line_number" => $line["SchedulingConditionId"],
-                            "release_number" => "0",
-                            "identifier" => !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"],
-                            "description" => $line["ItemDescription"] ?? null,
-                            "buyer_code" => $line["ItemSenderCode"],
-                            "supplier_code" => $line["ItemReceiverCode"] ?? null,
-                            "delivery_call_number" => null,
-                            "contract_number" => null,
-                            "earliest_datetime" => $line["ShipScheduleDate"],
-                            "latest_datetime" => $deljitList[0]["HorizonEndDate"] == "0000-00-00" ? null : $deljitList[0]["HorizonEndDate"],
-                            "collection_datetime_earliest" => null,
-                            "collection_datetime_latest" => null,
-                            "last_despatch_datetime" => $line["LastAsnShipmentDate"] == "0000-00-00" ? null : $line["LastAsnShipmentDate"],
-                            "order_status" => "firm",
-                            "quantity_original" => $line["ScheduleQuantity"],
-                            "quantity_confirmed" => $line["ScheduleQuantity"], // !empty($line["approveduserid"]) ? $line["ScheduleQuantity"] : 0,
-                            "quantity_packing" => 0,
-                            "quantity_packed" => 0,
-                            "quantity_to_be_shipped" => 0,
-                            "quantity_shipped" => $line["DeliveredQuantity"],
-                            "quantity_invoiced" => 0,
-                            "unit_quantity" => $line["ScheduleQuantityUom"],
-                            "unit_price" => 0,
-                            "unit_price_basis" => null,
-                            "line_amount" => null,
-                            "unit_price_currency" => null,
-                            "original_delivery_date" => $line["ShipScheduleDate"],
-                            "additional_information" => null,
-                            "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
-                            "insert_date" => $xdoc["INSERT_TIME"],
+                                "fk_order_consignee_id" => $orderConsignee["order_consignee_id"],
+                                "fk_order_id" => $orderId,
+                                "fk_product_id" => $product["product_id"],
+                                "line_number" => $line["SchedulingConditionId"],
+                                "release_number" => "0",
+                                "identifier" => !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"],
+                                "description" => $line["ItemDescription"] ?? null,
+                                "buyer_code" => $line["ItemSenderCode"],
+                                "supplier_code" => $line["ItemReceiverCode"] ?? null,
+                                "delivery_call_number" => null,
+                                "contract_number" => null,
+                                "earliest_datetime" => $line["ShipScheduleDate"],
+                                "latest_datetime" => $deljitList[0]["HorizonEndDate"] == "0000-00-00" ? null : $deljitList[0]["HorizonEndDate"],
+                                "collection_datetime_earliest" => null,
+                                "collection_datetime_latest" => null,
+                                "last_despatch_datetime" => $line["LastAsnShipmentDate"] == "0000-00-00" ? null : $line["LastAsnShipmentDate"],
+                                "order_status" => "firm",
+                                "quantity_original" => $line["ScheduleQuantity"],
+                                "quantity_confirmed" => $line["ScheduleQuantity"], // !empty($line["approveduserid"]) ? $line["ScheduleQuantity"] : 0,
+                                "quantity_packing" => 0,
+                                "quantity_packed" => 0,
+                                "quantity_to_be_shipped" => 0,
+                                "quantity_shipped" => $line["DeliveredQuantity"],
+                                "quantity_invoiced" => 0,
+                                "unit_quantity" => $line["ScheduleQuantityUom"],
+                                "unit_price" => 0,
+                                "unit_price_basis" => null,
+                                "line_amount" => null,
+                                "unit_price_currency" => null,
+                                "original_delivery_date" => $line["ShipScheduleDate"],
+                                "additional_information" => null,
+                                "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
+                                "insert_date" => $xdoc["INSERT_TIME"],
+                                "confirmed_date" => $xdoc["INSERT_TIME"]
                             ]
                         );
                         $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELJIT_DETAIL_ID" => $line["ID"]]);
@@ -627,12 +653,12 @@ foreach ($relations as $relation) {
                                     $instanceT->create(
                                         "v2_migration",
                                         [
-                                        "order_line_id" => $orderDetailId,
-                                        "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
-                                        "XDOC_DELJIT_DETAIL_ID" => $line["ID"],
-                                        "consignee_identifier" => @$line["DeliveryPointCode"],
-                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
-                                        "original_delivery_date" => @$line["ShipScheduleDate"],
+                                            "order_line_id" => $orderDetailId,
+                                            "XDOC_DESADV_DETAIL_ID" => $desadv["XDOC_DESADV_DETAIL_ID"],
+                                            "XDOC_DELJIT_DETAIL_ID" => $line["ID"],
+                                            "consignee_identifier" => @$line["DeliveryPointCode"],
+                                            "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                            "original_delivery_date" => @$line["ShipScheduleDate"],
                                         ]
                                     );
                                 } catch (InvalidQueryException $e) {
@@ -659,8 +685,8 @@ foreach ($relations as $relation) {
                     false,
                     false,
                     [
-                    ["name" => ["XD" => "XDOC_DESADV"], "on" => "XDD.DESADV_ID = XD.ID", "columns" => ["CarrierName", "ModeOfTransport", "IntermediateConsigneeCode", "FreightBillNumber", "ShipToCode", "ShipmentNumber", "BillOfLadingNumber", "ShipmentDateTime", "EstimatedArrivalDateTime", "TotalGrossWeight", "TotalNetWeight", "TotalGrossWeightUom"], "type" => Select::JOIN_LEFT],
-                    ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["STATUS"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XD" => "XDOC_DESADV"], "on" => "XDD.DESADV_ID = XD.ID", "columns" => ["CarrierName", "ModeOfTransport", "IntermediateConsigneeCode", "FreightBillNumber", "ShipToCode", "ShipmentNumber", "BillOfLadingNumber", "ShipmentDateTime", "EstimatedArrivalDateTime", "TotalGrossWeight", "TotalNetWeight", "TotalGrossWeightUom"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["STATUS"], "type" => Select::JOIN_LEFT],
                     ]
                 );
 
@@ -668,15 +694,15 @@ foreach ($relations as $relation) {
                     $despatchList = [$despatchList];
                 }
 
-                $consignee = $instanceT->get("consignee", "c", [], ["identifier" => $despatchList[0]["ShipToCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
+                $consignee = $instanceT->get("consignee", "c", [], ["identifier" => str_replace("&amp;", "&", $despatchList[0]["ShipToCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
                 if (empty($consignee)) {
                     try {
                         $consigneeId = $instanceT->create(
                             "consignee",
                             [
-                            "fk_buyer_id" => $buyerInformation["party_id"],
-                            "identifier" => $despatchList[0]["ShipToCode"],
-                            "name" => $despatchList[0]["ShipToCode"],
+                                "fk_buyer_id" => $buyerInformation["party_id"],
+                                "identifier" => str_replace("&amp;", "&", $despatchList[0]["ShipToCode"]),
+                                "name" => str_replace("&amp;", "&", $despatchList[0]["ShipToCode"]),
                             ]
                         );
                         $consignee["consignee_id"] = $consigneeId;
@@ -689,16 +715,16 @@ foreach ($relations as $relation) {
                     }
                 }
 
-                $dock = $instanceT->get("dock", "d", [], ["identifier" => $despatchList[0]["ShipToCode"], "fk_buyer_id" => $buyerInformation["party_id"]]);
-                if (empty($dock) and !empty($despatchList[0]["ShipToCode"])) {
+                $dock = $instanceT->get("dock", "d", [], ["identifier" => str_replace("&amp;", "&", $despatchList[0]["UnloadingArea"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
+                if (empty($dock) and !empty($despatchList[0]["UnloadingArea"]) and strlen($despatchList[0]["UnloadingArea"])) {
                     try {
                         $dockId = $instanceT->create(
                             "dock",
                             [
-                            "fk_buyer_id" => $buyerInformation["party_id"],
-                            "fk_consignee_id" => $consignee["consignee_id"],
-                            "identifier" => $despatchList[0]["ShipToCode"],
-                            "name" => $despatchList[0]["ShipToCode"],
+                                "fk_buyer_id" => $buyerInformation["party_id"],
+                                "fk_consignee_id" => $consignee["consignee_id"],
+                                "identifier" => str_replace("&amp;", "&", $despatchList[0]["UnloadingArea"]),
+                                "name" => str_replace("&amp;", "&", $despatchList[0]["UnloadingArea"]),
                             ]
                         );
                         $dock["dock_id"] = $dockId;
@@ -715,31 +741,31 @@ foreach ($relations as $relation) {
                         $shipmentId = $instanceT->create(
                             "shipment",
                             [
-                            "fk_party_id" => $supplierInformation["party_id"],
-                            "fk_carrier_id" => null,
-                            "is_shipped" => $despatchList[0]["STATUS"] & 8,
-                            "carrier_name" => $despatchList[0]["CarrierName"],
-                            "transport_identifier" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
-                            "transport_identifier_meaning" => 1,
-                            "despatch_datetime" => $despatchList[0]["ShipmentDateTime"],
-                            "arrival_datetime" => $despatchList[0]["EstimatedArrivalDateTime"],
-                            "mode_of_transport" => $despatchList[0]["ModeOfTransport"] == "-1" ? 21 : $despatchList[0]["ModeOfTransport"],
-                            "intermediate_consignee_code" => $despatchList[0]["IntermediateConsigneeCode"],
-                            "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
-                            "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
-                            "weight_unit" => !empty($despatchList[0]["TotalGrossWeightUom"]) ? $despatchList[0]["TotalGrossWeightUom"] : (!empty($despatchList[0]["TotalNetWeightUom"]) ? $despatchList[0]["TotalNetWeightUom"] : "KG"),
-                            "number_of_packages" => null,
-                            "shipment_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
-                            "port_of_loading" => null,
-                            "port_of_discharge" => null,
-                            "shipping_mark1" => null,
-                            "shipping_mark2" => null,
-                            "shipping_mark3" => null,
-                            "shipping_mark4" => null,
-                            "use_system_despatch_date" => 0,
-                            "freight_payment_code" => $despatchList[0]["FreightBillNumber"],
-                            "freight_bill_number_details" => $despatchList[0]["FreightBillNumber"],
-                            "insert_date" => $xdoc["INSERT_TIME"]
+                                "fk_party_id" => $supplierInformation["party_id"],
+                                "fk_carrier_id" => null,
+                                "is_shipped" => ($despatchList[0]["STATUS"] & 8) ? 1 : 0,
+                                "carrier_name" => $despatchList[0]["CarrierName"],
+                                "transport_identifier" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'Undefined',
+                                "transport_identifier_meaning" => 1,
+                                "despatch_datetime" => $despatchList[0]["ShipmentDateTime"],
+                                "arrival_datetime" => $despatchList[0]["EstimatedArrivalDateTime"],
+                                "mode_of_transport" => $despatchList[0]["ModeOfTransport"] == "-1" ? 21 : $despatchList[0]["ModeOfTransport"],
+                                "intermediate_consignee_code" => $despatchList[0]["IntermediateConsigneeCode"],
+                                "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
+                                "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
+                                "weight_unit" => !empty($despatchList[0]["TotalGrossWeightUom"]) ? $despatchList[0]["TotalGrossWeightUom"] : (!empty($despatchList[0]["TotalNetWeightUom"]) ? $despatchList[0]["TotalNetWeightUom"] : "KG"),
+                                "number_of_packages" => null,
+                                "shipment_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'Undefined',
+                                "port_of_loading" => null,
+                                "port_of_discharge" => null,
+                                "shipping_mark1" => null,
+                                "shipping_mark2" => null,
+                                "shipping_mark3" => null,
+                                "shipping_mark4" => null,
+                                "use_system_despatch_date" => 0,
+                                "freight_payment_code" => $despatchList[0]["FreightBillNumber"],
+                                "freight_bill_number_details" => $despatchList[0]["FreightBillNumber"],
+                                "insert_date" => $xdoc["INSERT_TIME"]
                             ]
                         );
                         $shipment["shipment_id"] = $shipmentId;
@@ -754,22 +780,22 @@ foreach ($relations as $relation) {
                     $despatchId = $instanceT->create(
                         "despatch",
                         [
-                        "fk_pr_id" => $pr["pr_id"],
-                        "fk_shipment_id" => $shipmentId ?? null,
-                        "fk_invoicee_id" => null,
-                        "fk_consignee_id" => $consignee["consignee_id"],
-                        "fk_dock_id" => $dock["dock_id"],
-                        "fk_document_id" => $documentId,
-                        "is_shipped"    => 1,
-                        "despatch_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'EMPTY',
-                        "bill_of_lading_number" => $despatchList[0]["BillOfLadingNumber"],
-                        "despatch_date" => $despatchList[0]["ShipmentDateTime"],
-                        "arrival_date" => $despatchList[0]["EstimatedArrivalDateTime"],
-                        "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
-                        "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
-                        "weight_unit" => $despatchList[0]["TotalGrossWeightUom"] ?? 'KG',
-                        "number_of_packages" => null,
-                        "insert_date" => $xdoc["INSERT_TIME"]
+                            "fk_pr_id" => $pr["pr_id"],
+                            "fk_shipment_id" => $shipmentId ?? null,
+                            "fk_invoicee_id" => null,
+                            "fk_consignee_id" => $consignee["consignee_id"],
+                            "fk_dock_id" => $dock["dock_id"],
+                            "fk_document_id" => $documentId,
+                            "is_shipped" => ($despatchList[0]["STATUS"] & 8) ? 1 : 0,
+                            "despatch_number" => !empty($despatchList[0]["ShipmentNumber"]) ? $despatchList[0]["ShipmentNumber"] : 'Undefined',
+                            "bill_of_lading_number" => $despatchList[0]["BillOfLadingNumber"],
+                            "despatch_date" => $despatchList[0]["ShipmentDateTime"],
+                            "arrival_date" => $despatchList[0]["EstimatedArrivalDateTime"],
+                            "gross_weight" => $despatchList[0]["TotalGrossWeight"] ?? 0,
+                            "net_weight" => $despatchList[0]["TotalNetWeight"] ?? 0,
+                            "weight_unit" => $despatchList[0]["TotalGrossWeightUom"] ?? 'KG',
+                            "number_of_packages" => null,
+                            "insert_date" => $xdoc["INSERT_TIME"]
                         ]
                     );
 
@@ -787,9 +813,9 @@ foreach ($relations as $relation) {
                             $productId = $instanceT->create(
                                 "product",
                                 [
-                                "fk_supplier_id" => $supplierInformation["party_id"],
-                                "identifier" => $productIdentifier,
-                                "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "fk_supplier_id" => $supplierInformation["party_id"],
+                                    "identifier" => $productIdentifier,
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
                                 ]
                             );
                             $productIdentifier = null;
@@ -807,15 +833,15 @@ foreach ($relations as $relation) {
                         $dpId = $instanceT->create(
                             "despatch_product",
                             [
-                            "fk_despatch_id" => $despatchId,
-                            "fk_order_line_id" => $migratedOrderLine["order_line_id"],
-                            "fk_product_id" => $product["product_id"],
-                            "quantity_despatch" => $line["DispatchQuantity"],
-                            "quantity_package_handling" => 1,
-                            "quantity_package_packaging" => 1,
-                            "unit_quantity" => "PCE",
-                            "advice_note_number" => "",
-                            "insert_date" => $xdoc["INSERT_TIME"]
+                                "fk_despatch_id" => $despatchId,
+                                "fk_order_line_id" => $migratedOrderLine["order_line_id"],
+                                "fk_product_id" => $product["product_id"],
+                                "quantity_despatch" => $line["DispatchQuantity"],
+                                "quantity_package_handling" => 1,
+                                "quantity_package_packaging" => 1,
+                                "unit_quantity" => "PCE",
+                                "advice_note_number" => "",
+                                "insert_date" => $xdoc["INSERT_TIME"]
                             ]
                         );
                         $instanceT->update("v2_migration", ["despatch_product_id" => $dpId], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]]);
@@ -831,32 +857,32 @@ foreach ($relations as $relation) {
                         $outer = $instanceT->create(
                             "despatch_package",
                             [
-                            "fk_despatch_id" => $despatchId,
-                            "fk_order_line_id" => $migratedOrderLine["order_line_id"],
-                            "fk_product_packaging_id" => $product_packaging["product_packaging_id"],
-                            "type" => "1",
-                            "is_full" => "0",
-                            "quantity_package" => 1,
-                            "quantity_part" => $line["DispatchQuantity"],
-                            "gross_weight" => 1,
-                            "net_weight" => 1,
-                            "weight_unit" => "KG",
+                                "fk_despatch_id" => $despatchId,
+                                "fk_order_line_id" => $migratedOrderLine["order_line_id"],
+                                "fk_product_packaging_id" => $product_packaging["product_packaging_id"],
+                                "type" => "1",
+                                "is_full" => "0",
+                                "quantity_package" => 1,
+                                "quantity_part" => $line["DispatchQuantity"],
+                                "gross_weight" => 1,
+                                "net_weight" => 1,
+                                "weight_unit" => "KG",
                             ]
                         );
                         $instanceT->create(
                             "despatch_package",
                             [
-                            "fk_despatch_id" => $despatchId,
-                            "fk_order_line_id" => $migratedOrderLine["order_line_id"],
-                            "fk_despatch_package_id" => $outer,
-                            "fk_product_packaging_id" => $product_packaging["product_packaging_id"],
-                            "type" => "2",
-                            "is_full" => "0",
-                            "quantity_package" => 1,
-                            "quantity_part" => $line["DispatchQuantity"],
-                            "gross_weight" => 1,
-                            "net_weight" => 1,
-                            "weight_unit" => "KG",
+                                "fk_despatch_id" => $despatchId,
+                                "fk_order_line_id" => $migratedOrderLine["order_line_id"],
+                                "fk_despatch_package_id" => $outer,
+                                "fk_product_packaging_id" => $product_packaging["product_packaging_id"],
+                                "type" => "2",
+                                "is_full" => "0",
+                                "quantity_package" => 1,
+                                "quantity_part" => $line["DispatchQuantity"],
+                                "gross_weight" => 1,
+                                "net_weight" => 1,
+                                "weight_unit" => "KG",
                             ]
                         );
                         $outer = null;
@@ -870,9 +896,10 @@ foreach ($relations as $relation) {
         }
     }
 
+    $logger->info("Calculating cumulatives for SENDER_PARTY: {$buyerInformation["migratedID"]} and RECIPIENT: {$supplierInformation["migratedID"]}");
     $deljitShipmentCumulativeWhere = new Where();
-    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["party_id"])
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["party_id"])
+    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["migratedID"])
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["migratedID"])
         ->expression("desdoc.STATUS & ?", 8);
     $deljitShipmentCumulativeColumns = [
         "LastAsnShipmentCumulativeQuantity" => new Expression("MAX(deld.LastAsnShipmentCumulativeQuantity)"),
@@ -887,9 +914,9 @@ foreach ($relations as $relation) {
         false,
         false,
         [
-        ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
-        ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
-        ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
+            ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
         ],
         "deld.ItemSenderCode"
     );
@@ -898,28 +925,37 @@ foreach ($relations as $relation) {
             "v2_migration",
             "m",
             [],
-            ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"], false, false, [
-            ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
-            ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
-            ]]
-        );
-
-        $instanceT->update(
-            "cumulative",
+            ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"]],
+            false,
+            false,
             [
-            "current_dispetched" => $deljitShipment["LastAsnShipmentCumulativeQuantity"]
-            ],
-            [
-            "fk_product_id" => $findRelation["fk_product_id"],
-            "fk_party_id" => $supplierInformation["party_id"],
-            "fk_consignee_id" => $findRelation["fk_consignee_id"]
+                ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
             ]
         );
+        if (!empty($findRelation)) {
+            $instanceT->update(
+                "cumulative",
+                [
+                    "current_dispetched" => $deljitShipment["LastAsnShipmentCumulativeQuantity"]
+                ],
+                [
+                    "fk_product_id" => $findRelation["fk_product_id"],
+                    "fk_party_id" => $buyerInformation["party_id"],
+                    "fk_consignee_id" => $findRelation["fk_consignee_id"]
+                ]
+            );
+        } else {
+            $logger->error("Cannot found document relatin in v2_migration table.");
+            $connectionT->rollback();
+            die();
+        }
     }
     $deljitReceivedCumulativeWhere = new Where();
-    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["party_id"])
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["party_id"]);
+    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["migratedID"])
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["migratedID"]);
     $deljitReceivedCumulativeColumns = [
+        "ID",
         "LastReceivedCumulativeQuantity" => new Expression("MAX(deld.LastReceivedCumulativeQuantity)"),
         "ItemSenderCode"
     ];
@@ -931,9 +967,9 @@ foreach ($relations as $relation) {
         false,
         false,
         [
-        ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
-        ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
-        ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
+            ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
         ],
         "deld.ItemSenderCode"
     );
@@ -942,22 +978,31 @@ foreach ($relations as $relation) {
             "v2_migration",
             "m",
             [],
-            ["XDOC_DELJIT_DETAIL_ID" => $deljitReceived["ID"], false, false, [
-            ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
-            ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
-            ]]
-        );
-        $instanceT->update(
-            "cumulative",
+            ["XDOC_DELJIT_DETAIL_ID" => $deljitReceived["ID"]],
+            false,
+            false,
             [
-            "current_acknowledged" => $deljitReceived["LastReceivedCumulativeQuantity"]
-            ],
-            [
-            "fk_product_id" => $findRelation["fk_product_id"],
-            "fk_party_id" => $supplierInformation["party_id"],
-            "fk_consignee_id" => $findRelation["fk_consignee_id"]
+                ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
             ]
         );
+        if (!empty($findRelation)) {
+            $instanceT->update(
+                "cumulative",
+                [
+                    "current_acknowledged" => $deljitReceived["LastReceivedCumulativeQuantity"]
+                ],
+                [
+                    "fk_product_id" => $findRelation["fk_product_id"],
+                    "fk_party_id" => $buyerInformation["party_id"],
+                    "fk_consignee_id" => $findRelation["fk_consignee_id"]
+                ]
+            );
+        } else {
+            $logger->error("Cannot found document relatin in v2_migration table.");
+            $connectionT->rollback();
+            die();
+        }
     }
 }
 $connectionT->commit();

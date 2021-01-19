@@ -1,4 +1,5 @@
 variables:
+  STAGING_PATH: "/var/www/html/000_backendApps/otoedi-migration"
   PRODUCTION_PATH: "/var/www/html/000_backendApps/otoedi-migration"
 
 image: php:7.4
@@ -6,6 +7,7 @@ image: php:7.4
 # Define pipeline stages
 stages:
   - code-quality
+  - deploy-staging
   - deploy-production
 
 # Let's build before deploy
@@ -30,6 +32,25 @@ code-check:
   artifacts:
     paths:
       - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_COMMIT_SHORT_SHA/phpcs-report.txt
+
+deploy-staging:
+  stage: deploy-staging
+  script:
+    - echo "Deploying to staging server"
+    - mkdir build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG -p
+    - rsync -va . build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/ --exclude=*.config-production.json --exclude=*.config-development.json --exclude=build --exclude=.git
+    - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.90:STAGING_PATH --delete
+    - ssh -tt nginx@10.1.1.90 "composer && php73 /usr/local/bin/composer -d$STAGING_PATH install --no-interaction --profile --prefer-dist --optimize-autoloader --no-dev"
+
+  artifacts:
+    paths:
+      - build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_COMMIT_SHORT_SHA/$CI_ENVIRONMENT_SLUG/
+    expire_in: 1 week
+  environment:
+    name: staging
+  allow_failure: false
+  only:
+    - master
 
 deploy-production:
   stage: deploy-production
