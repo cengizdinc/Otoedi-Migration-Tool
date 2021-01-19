@@ -893,11 +893,13 @@ foreach ($relations as $relation) {
                 break;
         }
     }
-
-    $logger->info("Calculating cumulatives for SENDER_PARTY: {$buyerInformation["migratedID"]} and RECIPIENT: {$supplierInformation["migratedID"]}");
+}
+/*
+foreach ($migratedSupplierId as $supplier) {
+    $logger->info("Calculating cumulatives for SENDER_PARTY: {$migratedBuyerId} and RECIPIENT: {$supplier}");
     $deljitShipmentCumulativeWhere = new Where();
-    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["migratedID"])
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["migratedID"])
+    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $migratedBuyerId)
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplier)
         ->expression("desdoc.STATUS & ?", 8);
     $deljitShipmentCumulativeColumns = [
         "LastAsnShipmentCumulativeQuantity" => new Expression("MAX(deld.LastAsnShipmentCumulativeQuantity)"),
@@ -928,6 +930,7 @@ foreach ($relations as $relation) {
             false,
             [
                 ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["o" => "order"], "on" => "ol.fk_order_id = o.order_id", "columns" => ["fk_buyer_id"], "type" => Select::JOIN_LEFT],
                 ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
             ]
         );
@@ -939,19 +942,19 @@ foreach ($relations as $relation) {
                 ],
                 [
                     "fk_product_id" => $findRelation["fk_product_id"],
-                    "fk_party_id" => $buyerInformation["party_id"],
+                    "fk_party_id" => $findRelation["fk_buyer_id"],
                     "fk_consignee_id" => $findRelation["fk_consignee_id"]
                 ]
             );
         } else {
-            $logger->error("Cannot found document relatin in v2_migration table.");
+            $logger->error("Cannot found document relation in v2_migration table.");
             $connectionT->rollback();
             die();
         }
     }
     $deljitReceivedCumulativeWhere = new Where();
-    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $buyerInformation["migratedID"])
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplierInformation["migratedID"]);
+    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $migratedBuyerId)
+        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplier);
     $deljitReceivedCumulativeColumns = [
         "ID",
         "LastReceivedCumulativeQuantity" => new Expression("MAX(deld.LastReceivedCumulativeQuantity)"),
@@ -981,6 +984,7 @@ foreach ($relations as $relation) {
             false,
             [
                 ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["o" => "order"], "on" => "ol.fk_order_id = o.order_id", "columns" => ["fk_buyer_id"], "type" => Select::JOIN_LEFT],
                 ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
             ]
         );
@@ -992,15 +996,16 @@ foreach ($relations as $relation) {
                 ],
                 [
                     "fk_product_id" => $findRelation["fk_product_id"],
-                    "fk_party_id" => $buyerInformation["party_id"],
+                    "fk_party_id" => $findRelation["fk_buyer_id"],
                     "fk_consignee_id" => $findRelation["fk_consignee_id"]
                 ]
             );
         } else {
-            $logger->error("Cannot found document relatin in v2_migration table.");
+            $logger->error("Cannot found document relation in v2_migration table.");
             $connectionT->rollback();
             die();
         }
     }
 }
+*/
 $connectionT->commit();
