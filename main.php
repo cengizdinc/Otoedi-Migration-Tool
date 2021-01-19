@@ -235,7 +235,7 @@ foreach ($relations as $relation) {
                         ["name" => ["XD" => "XDOC_DELFOR"], "on" => "XDD.DELFOR_ID = XD.ID", "columns" => ["Snrf", "BeginningInventoryDate", "HorizonEndDate", "BuyerCode", "SupplierCode", "SellerCode"], "type" => Select::JOIN_LEFT],
                         ["name" => ["X" => "XDOC"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ISSUE_DATE",], "type" => Select::JOIN_LEFT],
                         ["name" => ["DD" => "DESADV_DELJIT"], "on" => "XDD.ID = DD.XDOC_DELFOR_DETAIL_ID", "columns" => ["XDOC_DESADV_DETAIL_ID"], "type" => Select::JOIN_LEFT],
-                        ["name" => ["XDESD" => "XDOC_DESADV_DETAIL"], "on" => "XDESD.ID = DD.XDOC_DESADV_DETAIL_ID", "columns" => ["ScheduleQuantity"], "type" => Select::JOIN_LEFT],
+                        ["name" => ["XDESD" => "XDOC_DESADV_DETAIL"], "on" => "XDESD.ID = DD.XDOC_DESADV_DETAIL_ID", "columns" => [], "type" => Select::JOIN_LEFT],
                         ["name" => ["XDESDX" => "XDOC"], "on" => "XDESD.XDOC_ID = XDESDX.ID", "columns" => ["DesadvStatus" => "STATUS"], "type" => Select::JOIN_LEFT],
                     ]
                 );
