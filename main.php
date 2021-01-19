@@ -197,10 +197,9 @@ foreach ($relations as $relation) {
         }
         try {
             $releaseNumberSuffix = $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? ("-" . $xdoc["REPLACEMENT_XDOC_ID"]) : null;
-            $xmlPath = basename($xdoc["XML_PATH"]);
-            $ediPath = basename($xdoc["EDI_PATH"]);
-            $currentPath = "/var/www/data/000_backendApps/v3.otoedi.com/arc/";
-            $originalPath = "/var/www/data/000_backendApps/v3.otoedi.com/org/";
+            $migrationPath = "/var/www/data/000_backendApps/v3.otoedi.com/40/";
+            $xmlPath = substr($xdoc["XML_PATH"], 34, strlen($xdoc["XML_PATH"]));
+
             $documentId = $instanceT->create(
                 "document",
                 [
@@ -213,8 +212,7 @@ foreach ($relations as $relation) {
                     "additional_information" => '{"migratedFromV2": "yes","validityPeriod": {"from": "", "until": ""}, "sender_edi_code": "'
                         . $buyerInformation["party_id"] . '", "receiver_edi_code": "'
                         . $supplierInformation["party_id"] . '"}',
-                    "original_filename" => $originalPath . $ediPath,
-                    "current_path" => $currentPath . $xmlPath,
+                    "current_path" => $migrationPath . $xmlPath,
                     "insert_date" => $xdoc["INSERT_TIME"],
                 ]
             );

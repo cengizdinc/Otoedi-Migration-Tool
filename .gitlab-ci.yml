@@ -39,7 +39,7 @@ deploy-staging:
     - echo "Deploying to staging server"
     - mkdir build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG -p
     - rsync -va . build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/ --exclude=*.config-production.json --exclude=*.config-development.json --exclude=build --exclude=.git
-    - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.90:STAGING_PATH --delete
+    - rsync -arve ssh build/$CI_COMMIT_REF_NAME$CI_COMMIT_TAG/$CI_ENVIRONMENT_SLUG/. nginx@10.1.1.90:$STAGING_PATH --delete
     - ssh -tt nginx@10.1.1.90 "composer && php73 /usr/local/bin/composer -d$STAGING_PATH install --no-interaction --profile --prefer-dist --optimize-autoloader --no-dev"
 
   artifacts:
