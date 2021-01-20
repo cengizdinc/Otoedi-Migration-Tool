@@ -187,8 +187,17 @@ foreach ($relations as $relation) {
     }
     $xdocTotal = count($getXdocList);
     $xdocCounter = 1;
-    foreach ($getXdocList as $xdoc) {
-        $logger->info("XDOC progress: " . round($xdocCounter / $xdocTotal * 100) . "% - " . "($xdocCounter/$xdocTotal)");
+    $percentDiff = 0;
+    foreach ($getXdocList as $i => $xdoc) {
+        $percent =  round($xdocCounter / $xdocTotal * 100);
+        if ($i == 0) {
+            $percentDiff = $percent;
+            $logger->info("XDOC progress: " . $percent . "% - " . "($xdocCounter/$xdocTotal)");
+        }
+        if ($percent != $percentDiff) {
+            $percentDiff = $percent;
+            $logger->info("XDOC progress: " . $percent . "% - " . "($xdocCounter/$xdocTotal)");
+        }
         $xdocCounter++;
         if (empty($xdoc["TYPE"])) {
             $logger->critical("Cannot identify document type, xdoc id: {$xdoc["ID"]}. Aborted.");
@@ -297,7 +306,7 @@ foreach ($relations as $relation) {
                         }
                     }
                     if (!empty($line["UnloadingDockCode"])) {
-                        $dock = $instanceT->get("dock", "d", ["identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
+                        $dock = $instanceT->get("dock", "d", [], ["identifier" => str_replace("&amp;", "&", $line["UnloadingDockCode"]), "fk_buyer_id" => $buyerInformation["party_id"]]);
                         if (empty($dock) and !empty($line["UnloadingDockCode"]) and strlen($line["UnloadingDockCode"]) > 0) {
                             try {
                                 $dockId = $instanceT->create(
@@ -358,17 +367,15 @@ foreach ($relations as $relation) {
                     $product = $instanceT->get("product", "p", [], ["identifier" => $line["ItemSenderCode"], "fk_supplier_id" => $supplierInformation["party_id"]]);
                     if (empty($product)) {
                         try {
-                            $productIdentifier = !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"];
                             $productId = $instanceT->create(
                                 "product",
                                 [
                                     "fk_supplier_id" => $supplierInformation["party_id"],
-                                    "identifier" => $productIdentifier,
-                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "identifier" => trim($line["ItemSenderCode"]),
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $line["ItemSenderCode"]
                                 ]
                             );
                             $product["product_id"] = $productId;
-                            $productIdentifier = null;
                             //  $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
                             $logger->critical("Cannot create product, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
@@ -391,7 +398,7 @@ foreach ($relations as $relation) {
                                 "supplier_code" => $line["ItemReceiverCode"] ?? null,
                                 "delivery_call_number" => null,
                                 "contract_number" => null,
-                                "earliest_datetime" => $line["ForecastPeriodStartDate"],
+                                "earliest_datetime" => $line["ForecastPeriodStartDate"] == "0000-00-00" ? null : $line["ForecastPeriodStartDate"],
                                 "latest_datetime" => $line["HorizonEndDate"] == "0000-00-00" ? null : $line["HorizonEndDate"],
                                 "collection_datetime_earliest" => null,
                                 "collection_datetime_latest" => null,
@@ -409,7 +416,7 @@ foreach ($relations as $relation) {
                                 "unit_price_basis" => null,
                                 "line_amount" => null,
                                 "unit_price_currency" => null,
-                                "original_delivery_date" => $line["ForecastPeriodStartDate"],
+                                "original_delivery_date" => $line["ForecastPeriodStartDate"] == "0000-00-00" ? null : $line["ForecastPeriodStartDate"],
                                 "additional_information" => null,
                                 "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
                                 "insert_date" => $xdoc["INSERT_TIME"],
@@ -421,7 +428,7 @@ foreach ($relations as $relation) {
                             $matchWithDesadv = [$matchWithDesadv];
                         }
                         foreach ($matchWithDesadv as $desadv) {
-                            if (!empty($matchWithDesadv["XDOC_DESADV_DETAIL_ID"])) {
+                            if (!empty($desadv["XDOC_DESADV_DETAIL_ID"])) {
                                 try {
                                     $instanceT->create(
                                         "v2_migration",
@@ -580,19 +587,17 @@ foreach ($relations as $relation) {
                             die();
                         }
                     }
-                    $product = $instanceT->get("product", "p", [], ["identifier" => $line["ItemSenderCode"], "fk_supplier_id" => $supplierInformation["party_id"]]);
+                    $product = $instanceT->get("product", "p", [], ["identifier" => trim($line["ItemSenderCode"]), "fk_supplier_id" => $supplierInformation["party_id"]]);
                     if (empty($product)) {
                         try {
-                            $productIdentifier = !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"];
                             $productId = $instanceT->create(
                                 "product",
                                 [
                                     "fk_supplier_id" => $supplierInformation["party_id"],
-                                    "identifier" => $productIdentifier,
-                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "identifier" => trim($line["ItemSenderCode"]),
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $line["ItemSenderCode"]
                                 ]
                             );
-                            $productIdentifier = null;
                             $product["product_id"] = $productId;
                             // $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
@@ -616,7 +621,7 @@ foreach ($relations as $relation) {
                                 "supplier_code" => $line["ItemReceiverCode"] ?? null,
                                 "delivery_call_number" => null,
                                 "contract_number" => null,
-                                "earliest_datetime" => $line["ShipScheduleDate"],
+                                "earliest_datetime" => $line["ShipScheduleDate"] == "0000-00-00" ? null : $line["ShipScheduleDate"],
                                 "latest_datetime" => $deljitList[0]["HorizonEndDate"] == "0000-00-00" ? null : $deljitList[0]["HorizonEndDate"],
                                 "collection_datetime_earliest" => null,
                                 "collection_datetime_latest" => null,
@@ -634,7 +639,7 @@ foreach ($relations as $relation) {
                                 "unit_price_basis" => null,
                                 "line_amount" => null,
                                 "unit_price_currency" => null,
-                                "original_delivery_date" => $line["ShipScheduleDate"],
+                                "original_delivery_date" => $line["ShipScheduleDate"] == "0000-00-00" ? null : $line["ShipScheduleDate"],
                                 "additional_information" => null,
                                 "is_cancelled" => $xdoc["REPLACEMENT_XDOC_ID"] > 0 ? 1 : 0,
                                 "insert_date" => $xdoc["INSERT_TIME"],
@@ -804,25 +809,24 @@ foreach ($relations as $relation) {
                     die();
                 }
                 foreach ($despatchList as $line) {
-                    $product = $instanceT->get("product", "p", [], ["identifier" => "ItemSenderCode", "fk_supplier_id" => $supplierInformation["party_id"]]);
+                    $product = $instanceT->get("product", "p", [], ["identifier" => trim($line["ItemSenderCode"]), "fk_supplier_id" => $supplierInformation["party_id"]]);
                     if (empty($product)) {
                         try {
-                            $productIdentifier = !empty($line["ItemSenderCode"]) ? $line["ItemSenderCode"] : $line["ItemReceiverCode"];
                             $productId = $instanceT->create(
                                 "product",
                                 [
                                     "fk_supplier_id" => $supplierInformation["party_id"],
-                                    "identifier" => $productIdentifier,
-                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $productIdentifier
+                                    "identifier" => trim($line["ItemSenderCode"]),
+                                    "description" => !empty($line["ItemDescription"]) ? $line["ItemDescription"] : $line["ItemSenderCode"]
                                 ]
                             );
-                            $productIdentifier = null;
                             $product["product_id"] = $productId;
                             // $logger->debug("Product created, id: $productId.");
                         } catch (InvalidQueryException $e) {
                             $logger->critical("Cannot create product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}. Aborted.");
-                            $connectionT->rollback();
-                            die();
+                            continue;
+                            // $connectionT->rollback();
+                            // die();
                         }
                     }
 
@@ -845,9 +849,10 @@ foreach ($relations as $relation) {
                         $instanceT->update("v2_migration", ["despatch_product_id" => $dpId], ["XDOC_DESADV_DETAIL_ID" => $line["ID"]]);
                         // $logger->debug("Despatch product created. id: $dpId");
                     } catch (InvalidQueryException $e) {
-                        $logger->critical("Cannot create despatch product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}, desadvdetail. Aborted.");
-                        $connectionT->rollback();
-                        die();
+                        $logger->critical("Cannot create despatch product, {$e->getMessage()}, xdoc id: {$xdoc["ID"]}, desadvdetail: {$line["ID"]}. Aborted.");
+                        continue;
+                        // $connectionT->rollback();
+                        // die();
                     }
 
                     $product_packaging = $instanceT->get("product_packaging", "pp", [], ["fk_product_id" => $product["product_id"]], 1);
@@ -894,92 +899,45 @@ foreach ($relations as $relation) {
         }
     }
 }
-/*
-foreach ($migratedSupplierId as $supplier) {
-    $logger->info("Calculating cumulatives for SENDER_PARTY: {$migratedBuyerId} and RECIPIENT: {$supplier}");
-    $deljitShipmentCumulativeWhere = new Where();
-    $deljitShipmentCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $migratedBuyerId)
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplier)
-        ->expression("desdoc.STATUS & ?", 8);
-    $deljitShipmentCumulativeColumns = [
-        "LastAsnShipmentCumulativeQuantity" => new Expression("MAX(deld.LastAsnShipmentCumulativeQuantity)"),
-        "ItemSenderCode",
-        "ID"
-    ];
-    $deljitShipmentCumulative = $instanceS->get(
-        "XDOC_DELJIT_DETAIL",
-        "deld",
-        $deljitShipmentCumulativeColumns,
-        $deljitShipmentCumulativeWhere,
-        false,
-        false,
-        [
-            ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
-            ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
-            ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
-        ],
-        "deld.ItemSenderCode"
-    );
-    foreach ($deljitShipmentCumulative as $deljitShipment) {
-        $findRelation = $instanceT->get(
-            "v2_migration",
-            "m",
-            [],
-            ["XDOC_DELJIT_DETAIL_ID" => $deljitShipment["ID"]],
-            false,
-            false,
-            [
-                ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
-                ["name" => ["o" => "order"], "on" => "ol.fk_order_id = o.order_id", "columns" => ["fk_buyer_id"], "type" => Select::JOIN_LEFT],
-                ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
-            ]
-        );
-        if (!empty($findRelation)) {
-            $instanceT->update(
-                "cumulative",
-                [
-                    "current_dispetched" => $deljitShipment["LastAsnShipmentCumulativeQuantity"]
-                ],
-                [
-                    "fk_product_id" => $findRelation["fk_product_id"],
-                    "fk_party_id" => $findRelation["fk_buyer_id"],
-                    "fk_consignee_id" => $findRelation["fk_consignee_id"]
-                ]
-            );
-        } else {
-            $logger->error("Cannot found document relation in v2_migration table.");
-            $connectionT->rollback();
-            die();
-        }
+$suppliers = [];
+$buyer = null;
+foreach ($relations as $relation) {
+    if (in_array($relation["XDOC_TYPE_ID"], ["1","2"])) {
+        $suppliers[] = $relation["receiverId"];
+        $buyer = $relation["senderId"];
     }
-    $deljitReceivedCumulativeWhere = new Where();
-    $deljitReceivedCumulativeWhere->equalTo("XDOC.SENDER_PARTY_ID", $migratedBuyerId)
-        ->equalTo("XDOC.RECEPIENT_PARTY_ID", $supplier);
-    $deljitReceivedCumulativeColumns = [
-        "ID",
-        "LastReceivedCumulativeQuantity" => new Expression("MAX(deld.LastReceivedCumulativeQuantity)"),
-        "ItemSenderCode"
+}
+$suppliers = array_unique($suppliers);
+foreach ($suppliers as $supplier) {
+    $logger->info("Calculating cumulatives for SENDER_PARTY: {$buyer} and RECIPIENT: {$supplier}");
+    $cWhere = new Where();
+    $cWhere->equalTo("SENDER_PARTY_ID", $buyer)->isNotNull("XDOC_DELJIT_DETAIL_ID");
+    $cCol = [
+      "ID" => new Expression("MAX(XDD.ID)"),
+      "ItemSenderCode",
+      "LastAsnShipmentCumulativeQuantity",
+      "LastReceivedCumulativeQuantity"
     ];
-    $deljitReceivedCumulative = $instanceS->get(
+    $cumulatives = $instanceS->get(
         "XDOC_DELJIT_DETAIL",
-        "deld",
-        $deljitReceivedCumulativeColumns,
-        $deljitReceivedCumulativeWhere,
+        "XDD",
+        $cCol,
+        $cWhere,
         false,
         false,
         [
-            ["name" => "XDOC", "on" => "deld.XDOC_ID = XDOC.ID", "columns" => [], "type" => Select::JOIN_INNER],
-            ["name" => ["des" => "XDOC_DESADV"], "on" => "deld.LastDeliveredDesadvID = des.ID", "columns" => [], "type" => Select::JOIN_INNER],
-            ["name" => ["desdoc" => "XDOC"], "on" => "des.XDOC_ID = desdoc.ID", "columns" => [], "type" => Select::JOIN_INNER]
+            ["name" => ["X" => "XDOC"], "on" => "XDD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ShipToCode"], "type" => Select::JOIN_INNER],
+            ["name" => ["DD" => "DESADV_DELJIT"], "on" => "XDD.ID = DD.XDOC_DELJIT_DETAIL_ID", "columns" => ["XDOC_DELJIT_DETAIL_ID"], "type" => Select::JOIN_INNER]
         ],
-        "deld.ItemSenderCode"
+        ["ItemSenderCode", "ShipToCode"]
     );
-    foreach ($deljitReceivedCumulative as $deljitReceived) {
+    foreach ($cumulatives as $c) {
         $findRelation = $instanceT->get(
             "v2_migration",
             "m",
             [],
-            ["XDOC_DELJIT_DETAIL_ID" => $deljitReceived["ID"]],
+            ["XDOC_DELJIT_DETAIL_ID" => $c["XDOC_DELJIT_DETAIL_ID"]],
             false,
             false,
             [
@@ -992,7 +950,8 @@ foreach ($migratedSupplierId as $supplier) {
             $instanceT->update(
                 "cumulative",
                 [
-                    "current_acknowledged" => $deljitReceived["LastReceivedCumulativeQuantity"]
+                    "current_dispetched" => $c["LastAsnShipmentCumulativeQuantity"],
+                    "current_acknowledged" => $c["LastReceivedCumulativeQuantity"]
                 ],
                 [
                     "fk_product_id" => $findRelation["fk_product_id"],
@@ -1007,5 +966,4 @@ foreach ($migratedSupplierId as $supplier) {
         }
     }
 }
-*/
 $connectionT->commit();
