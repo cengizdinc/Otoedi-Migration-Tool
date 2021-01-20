@@ -64,6 +64,7 @@ $relations = $instanceS->get(
 $logger->info(count($relations) . " relations found.");
 $connectionT = $instanceT->adapter->getDriver()->getConnection();
 $connectionT = $connectionT->beginTransaction();
+
 $relationCounter = 1;
 $totalRelation = count($relations);
 foreach ($relations as $relation) {
@@ -424,6 +425,24 @@ foreach ($relations as $relation) {
                             ]
                         );
                         $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELFOR_DETAIL_ID" => $line["ID"]]);
+                        if (empty($matchWithDesadv)) {
+                            try {
+                                $instanceT->create(
+                                    "v2_migration",
+                                    [
+                                        "order_line_id" => $orderDetailId,
+                                        "XDOC_DELFOR_DETAIL_ID" => $line["ID"],
+                                        "consignee_identifier" => @$line["DeliveryPointCode"],
+                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                        "original_delivery_date" => @$line["ForecastPeriodStartDate"],
+                                    ]
+                                );
+                            } catch (InvalidQueryException $e) {
+                                $logger->critical("Cannot create v2migration row, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
+                                $connectionT->rollback();
+                                die();
+                            }
+                        }
                         if (!isset($matchWithDesadv[0])) {
                             $matchWithDesadv = [$matchWithDesadv];
                         }
@@ -647,6 +666,24 @@ foreach ($relations as $relation) {
                             ]
                         );
                         $matchWithDesadv = $instanceS->get("DESADV_DELJIT", "DD", [], ["XDOC_DELJIT_DETAIL_ID" => $line["ID"]]);
+                        if (empty($matchWithDesadv)) {
+                            try {
+                                $instanceT->create(
+                                    "v2_migration",
+                                    [
+                                        "order_line_id" => $orderDetailId,
+                                        "XDOC_DELJIT_DETAIL_ID" => $line["ID"],
+                                        "consignee_identifier" => @$line["DeliveryPointCode"],
+                                        "dock_identifier" => !empty($line["UnloadingDockCode"]) ? $line["UnloadingDockCode"] : @$line["DeliveryPointCode"],
+                                        "original_delivery_date" => @$line["ShipScheduleDate"],
+                                    ]
+                                );
+                            } catch (InvalidQueryException $e) {
+                                $logger->critical("Cannot create v2migration row, {$e->getMessage()}; xdoc id: {$xdoc["ID"]}. Aborted.");
+                                $connectionT->rollback();
+                                die();
+                            }
+                        }
                         if (!isset($matchWithDesadv[0])) {
                             $matchWithDesadv = [$matchWithDesadv];
                         }
@@ -899,6 +936,7 @@ foreach ($relations as $relation) {
         }
     }
 }
+
 $suppliers = [];
 $buyer = null;
 foreach ($relations as $relation) {
@@ -910,19 +948,79 @@ foreach ($relations as $relation) {
 $suppliers = array_unique($suppliers);
 foreach ($suppliers as $supplier) {
     $logger->info("Calculating cumulatives for SENDER_PARTY: {$buyer} and RECIPIENT: {$supplier}");
-    $cWhere = new Where();
-    $cWhere->equalTo("SENDER_PARTY_ID", $buyer)->isNotNull("XDOC_DELJIT_DETAIL_ID");
-    $cCol = [
-      "ID" => new Expression("MAX(XDD.ID)"),
-      "ItemSenderCode",
-      "LastAsnShipmentCumulativeQuantity",
-      "LastReceivedCumulativeQuantity"
-    ];
-    $cumulatives = $instanceS->get(
+    $riWhere = new Where();
+    $riWhere->equalTo("SENDER_PARTY_ID", $buyer);
+    $riCol = ["ID" => new Expression("MAX(XDD.ID)"),"ItemSenderCode"];
+    $receivedIds = $instanceS->get(
         "XDOC_DELJIT_DETAIL",
         "XDD",
-        $cCol,
-        $cWhere,
+        $riCol,
+        $riWhere,
+        false,
+        false,
+        [
+            ["name" => ["X" => "XDOC"], "on" => "XDD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ShipToCode"], "type" => Select::JOIN_INNER]
+        ],
+        ["ItemSenderCode", "ShipToCode"]
+    );
+    $receivedIds = array_column($receivedIds, 'ID');
+    $rWhere = new Where();
+    $rWhere->in("XDD.ID", $receivedIds);
+    $rCol = ["ID","ItemSenderCode", "LastAsnShipmentCumulativeQuantity", "LastReceivedCumulativeQuantity"];
+    $rCumulatives = $instanceS->get(
+        "XDOC_DELJIT_DETAIL",
+        "XDD",
+        $rCol,
+        $rWhere,
+        false,
+        false,
+        [
+            ["name" => ["X" => "XDOC"], "on" => "XDD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ShipToCode"], "type" => Select::JOIN_INNER]
+        ]
+    );
+    foreach ($rCumulatives as $c) {
+        $findRelation = $instanceT->get(
+            "v2_migration",
+            "m",
+            [],
+            ["XDOC_DELJIT_DETAIL_ID" => $c["ID"]],
+            false,
+            false,
+            [
+                ["name" => ["ol" => "order_line"], "on" => "ol.order_line_id = m.order_line_id", "columns" => ["fk_product_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["o" => "order"], "on" => "ol.fk_order_id = o.order_id", "columns" => ["fk_buyer_id"], "type" => Select::JOIN_LEFT],
+                ["name" => ["oc" => "order_consignee"], "on" => "ol.fk_order_consignee_id = oc.order_consignee_id", "columns" => ["fk_consignee_id"], "type" => Select::JOIN_LEFT],
+            ]
+        );
+        if (!empty($findRelation)) {
+            $instanceT->update(
+                "cumulative",
+                [
+                    "current_acknowledged" => $c["LastReceivedCumulativeQuantity"]
+                ],
+                [
+                    "fk_product_id" => $findRelation["fk_product_id"],
+                    "fk_party_id" => $findRelation["fk_buyer_id"],
+                    "fk_consignee_id" => $findRelation["fk_consignee_id"]
+                ]
+            );
+        } else {
+            $logger->error("Cannot found document relation in v2_migration table. c: received, XDD: {$c["ID"]}");
+            $connectionT->rollback();
+            die();
+        }
+    }
+    ###
+    $siWhere = new Where();
+    $siWhere->equalTo("SENDER_PARTY_ID", $buyer)->isNotNull("XDOC_DELJIT_DETAIL_ID");
+    $siCol = ["ID" => new Expression("MAX(XDD.ID)"), "ItemSenderCode"];
+    $shippedIds = $instanceS->get(
+        "XDOC_DELJIT_DETAIL",
+        "XDD",
+        $siCol,
+        $siWhere,
         false,
         false,
         [
@@ -932,12 +1030,29 @@ foreach ($suppliers as $supplier) {
         ],
         ["ItemSenderCode", "ShipToCode"]
     );
-    foreach ($cumulatives as $c) {
+    $shippedIds = array_column($shippedIds, 'ID');
+    $sWhere = new Where();
+    $sWhere->in("XDD.ID", $shippedIds);
+    $sCol = ["ID", "ItemSenderCode", "LastAsnShipmentCumulativeQuantity", "LastReceivedCumulativeQuantity"];
+    $sCumulatives = $instanceS->get(
+        "XDOC_DELJIT_DETAIL",
+        "XDD",
+        $sCol,
+        $sWhere,
+        false,
+        false,
+        [
+            ["name" => ["X" => "XDOC"], "on" => "XDD.XDOC_ID = X.ID", "columns" => [], "type" => Select::JOIN_INNER],
+            ["name" => ["XD" => "XDOC_DELJIT"], "on" => "XD.XDOC_ID = X.ID", "columns" => ["ShipToCode"], "type" => Select::JOIN_INNER],
+            ["name" => ["DD" => "DESADV_DELJIT"], "on" => "XDD.ID = DD.XDOC_DELJIT_DETAIL_ID", "columns" => ["XDOC_DELJIT_DETAIL_ID"], "type" => Select::JOIN_INNER]
+        ]
+    );
+    foreach ($sCumulatives as $c) {
         $findRelation = $instanceT->get(
             "v2_migration",
             "m",
             [],
-            ["XDOC_DELJIT_DETAIL_ID" => $c["XDOC_DELJIT_DETAIL_ID"]],
+            ["XDOC_DELJIT_DETAIL_ID" => $c["ID"]],
             false,
             false,
             [
@@ -951,7 +1066,6 @@ foreach ($suppliers as $supplier) {
                 "cumulative",
                 [
                     "current_dispetched" => $c["LastAsnShipmentCumulativeQuantity"],
-                    "current_acknowledged" => $c["LastReceivedCumulativeQuantity"]
                 ],
                 [
                     "fk_product_id" => $findRelation["fk_product_id"],
@@ -960,7 +1074,7 @@ foreach ($suppliers as $supplier) {
                 ]
             );
         } else {
-            $logger->error("Cannot found document relation in v2_migration table.");
+            $logger->error("Cannot found document relation in v2_migration table. c: shipped, XDD: {$c["ID"]}");
             $connectionT->rollback();
             die();
         }
